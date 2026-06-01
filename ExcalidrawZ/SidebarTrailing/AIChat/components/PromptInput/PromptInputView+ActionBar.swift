@@ -20,6 +20,8 @@ import LLMCore
 import SFSafeSymbols
 
 extension PromptInputView {
+    private var actionBarIconFrameLength: CGFloat { 18 }
+
     /// Left half of the action row: attachment menu, context-usage ring,
     /// model picker. Wrapped in an HStack so the whole group can take a
     /// shared `buttonStyle` from the caller (`.accessoryBar` on macOS 14+,
@@ -39,7 +41,54 @@ extension PromptInputView {
                 usedTokens: nil
             )
 
+            fileAccessToggleButton
+
             modelPicker
+        }
+    }
+
+    @ViewBuilder
+    var fileAccessToggleButton: some View {
+        Button {
+            toggleAIFileAccess()
+        } label: {
+            if #available(macOS 14.0, *) {
+                Image(systemName: activeFileAccessAllowsAI ? "eye" : "eye.slash")
+                    .font(.caption)
+                    .frame(width: actionBarIconFrameLength, height: actionBarIconFrameLength)
+                    .contentTransition(.symbolEffect(.replace))
+            } else {
+                Image(systemName: activeFileAccessAllowsAI ? "eye" : "eye.slash")
+                    .font(.caption)
+                    .frame(width: actionBarIconFrameLength, height: actionBarIconFrameLength)
+            }
+        }
+        .foregroundStyle(activeFileAccessAllowsAI ? .primary : .secondary)
+        .tint(activeFileAccessAllowsAI ? .accentColor : .secondary.opacity(0.75))
+        .disabled(!hasActiveFileForAIAccessControl || !canToggleAIFileAccess)
+        .help(fileAccessHelpText)
+    }
+
+    @MainActor
+    func toggleAIFileAccess() {
+        guard hasActiveFileForAIAccessControl, canToggleAIFileAccess else { return }
+        prefs.allowsFileAccess.toggle()
+    }
+
+    @MainActor
+    var fileAccessHelpText: String {
+        guard hasActiveFileForAIAccessControl else {
+            return "No file is open. AI can answer without file access."
+        }
+
+        guard canToggleAIFileAccess else {
+            return "This file is locked. AI cannot read or edit it; generated changes use a proposal canvas."
+        }
+
+        if activeFileAccessAllowsAI {
+            return "AI can read and edit this file. Click to prevent file access and use proposal edits instead."
+        } else {
+            return "AI cannot read or edit this file. Click to allow direct file access and editing."
         }
     }
 
@@ -64,8 +113,8 @@ extension PromptInputView {
             .disabled(!canInsertImages)
         } label: {
             Image(systemSymbol: .paperclip)
-                .resizable()
-                .frame(height: 12)
+                .font(.caption)
+                .frame(width: actionBarIconFrameLength, height: actionBarIconFrameLength)
         }
         .labelStyle(.iconOnly)
         .menuIndicator(.hidden)
@@ -143,9 +192,10 @@ extension PromptInputView {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
+            .frame(height: actionBarIconFrameLength)
             .contentShape(Rectangle())
         }
-        .menuIndicator(.visible)
+        .menuIndicator(.hidden)
         .disabled(tiers.isEmpty)
     }
 

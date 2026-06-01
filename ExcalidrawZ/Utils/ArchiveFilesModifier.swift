@@ -518,6 +518,27 @@ func cloudBackupHasLockedContentUnavailable(context: NSManagedObjectContext) asy
     return false
 }
 
+func cloudBackupHasEncryptedContent(context: NSManagedObjectContext) async throws -> Bool {
+    let allFiles: [PersistenceController.ExcalidrawGroup: [File]] = try PersistenceController.shared.listAllFiles(context: context)
+    for file in allFiles.values.flatMap({ $0 }) {
+        let snapshot: ArchiveFileSnapshot
+        do {
+            snapshot = try await archiveFileSnapshot(for: file)
+        } catch {
+            continue
+        }
+
+        do {
+            if try await storedEncryptedContentIfPresent(from: snapshot) != nil {
+                return true
+            }
+        } catch {
+            continue
+        }
+    }
+    return false
+}
+
 private func backupFileData(
     for file: File,
     context: NSManagedObjectContext

@@ -522,7 +522,7 @@ actor AIConversationRepository {
     func deleteMessages(messageIDs: [String]) async throws {
         let context = PersistenceController.shared.newTaskContext()
 
-        try await context.perform {
+        let blobs = try await context.perform {
             let linkFetch = NSFetchRequest<AIMessageCheckpointLink>(entityName: "AIMessageCheckpointLink")
             linkFetch.predicate = NSPredicate(format: "messageID IN %@", messageIDs)
             for link in try context.fetch(linkFetch) {
@@ -533,6 +533,7 @@ actor AIConversationRepository {
             fetchRequest.predicate = NSPredicate(format: "messageID IN %@", messageIDs)
 
             let messages = try context.fetch(fetchRequest)
+            let blobs = messages.compactMap(\.filesData)
 
             for message in messages {
                 context.delete(message)
@@ -541,7 +542,10 @@ actor AIConversationRepository {
             if context.hasChanges {
                 try context.save()
             }
+            return blobs
         }
+
+        await deleteAttachments(from: blobs)
     }
 
     /// Delete entire conversation and all its messages

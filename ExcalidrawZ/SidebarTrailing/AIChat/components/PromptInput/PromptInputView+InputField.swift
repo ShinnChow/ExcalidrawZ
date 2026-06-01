@@ -338,9 +338,8 @@ private struct PromptDraftTextArea: View {
     }
 }
 
-private extension View {
-    @ViewBuilder
-    func promptInputSubmitOnReturn(_ submit: @escaping () -> Void) -> some View {
+private extension TextArea {
+    func promptInputSubmitOnReturn(_ submit: @escaping () -> Void) -> TextArea {
 #if os(macOS)
         self.keyDownHandler(
             TextFieldKeyDownEventHandler(triggers: [(36, nil)]) { event in

@@ -6,8 +6,8 @@
 //
 
 import Foundation
-import CoreGraphics
 import LLMCore
+import SwiftUI
 
 struct AdjustElementsTool: Tool {
     struct AdjustElementsContext: ToolContext {
@@ -66,7 +66,10 @@ struct AdjustElementsTool: Tool {
             throw ToolError.executionFailed("Missing AdjustElementsContext")
         }
         let adjustContext = try context.resolve(AdjustElementsContext.self)
-        guard try await LockedContentAIGuard.canToolAccess(fileID: adjustContext.currentFileID) else {
+        guard try await LockedContentAIGuard.canToolAccess(
+            canvasTarget: adjustContext.canvasTarget,
+            currentFileID: adjustContext.currentFileID
+        ) else {
             return LockedContentAIGuard.lockedToolResult
         }
         guard let currentFileData = try await CurrentExcalidrawDataResolver.resolveLiveSnapshot(
@@ -103,24 +106,34 @@ struct AdjustElementsTool: Tool {
             throw ToolError.executionFailed(Self.describeExecutionError(error))
         }
 
+        let proposal = try await makeProposalArtifactIfNeeded(
+            canvasTarget: adjustContext.canvasTarget,
+            dryRun: payload.dryRun ?? false
+        )
+        let outputSurface = ToolOutputSurface(canvasTarget: adjustContext.canvasTarget)
+
         let output = ToolOutput(
             ok: true,
             version: payload.version ?? "1",
             dryRun: payload.dryRun ?? false,
+            canvasTarget: outputSurface.canvasTarget,
+            assistantInstruction: outputSurface.assistantInstruction,
             opCount: payload.ops.count,
             opCounts: result.opCounts,
             mermaidResults: canvasResults.mermaidResults.isEmpty ? nil : canvasResults.mermaidResults,
             skeletonResults: canvasResults.skeletonResults.isEmpty ? nil : canvasResults.skeletonResults,
-            connectResults: canvasResults.connectResults.isEmpty ? nil : canvasResults.connectResults
+            connectResults: canvasResults.connectResults.isEmpty ? nil : canvasResults.connectResults,
+            proposal: proposal
         )
 
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys]
         let encoded = try encoder.encode(output)
-        return .text(String(data: encoded, encoding: .utf8) ?? "")
+        let outputText = String(data: encoded, encoding: .utf8) ?? ""
+        return .text(outputText)
     }
 
-    private static func describeExecutionError(_ error: Error) -> String {
+    static func describeExecutionError(_ error: Error) -> String {
         if let javaScriptError = describeJavaScriptException(error) {
             return javaScriptError
         }
@@ -186,16 +199,6 @@ struct AdjustElementsTool: Tool {
         return String(describing: value)
     }
 
-    private struct CanvasActionExecutionError: LocalizedError {
-        let index: Int
-        let action: String
-        let underlying: Error
-
-        var errorDescription: String? {
-            let detail = AdjustElementsTool.describeExecutionError(underlying)
-            return "Canvas action #\(index + 1) (\(action)) failed: \(detail)"
-        }
-    }
 }
 
 private extension AdjustElementsTool {
@@ -204,193 +207,60 @@ private extension AdjustElementsTool {
         _ result: AdjustmentResult,
         canvasTarget: ExcalidrawCoordinatorRegistry.CanvasTarget
     ) async throws -> CanvasApplyResult {
-        guard let coordinator = ExcalidrawCoordinatorRegistry.shared.coordinator(for: canvasTarget) else {
-            throw ToolError.executionFailed("Missing active Excalidraw coordinator")
-        }
-
-        if result.requiresFullReplace {
-            try await coordinator.replaceAllElements(result.file.elements)
-        } else {
-            let addedElements = result.file.elements.filter { result.createdElementIds.contains($0.id) }
-            let updatedElements = result.file.elements.filter {
-                result.updatedElementIds.contains($0.id) && !result.createdElementIds.contains($0.id)
-            }
-
-            if !addedElements.isEmpty {
-                try await coordinator.addElements(addedElements)
-            }
-            if !updatedElements.isEmpty {
-                let updates = try updatedElements.map { element in
-                    try ExcalidrawCore.UpdateElementOperation(
-                        id: element.id,
-                        updates: makeElementUpdates(from: element)
-                    )
-                }
-                try await coordinator.updateElements(updates)
-            }
-            if !result.deletedElementIds.isEmpty {
-                try await coordinator.removeElements(ids: result.deletedElementIds)
-            }
-        }
-
-        let cameraDirector = ExcalidrawCoordinatorRegistry.shared.cameraDirector(for: canvasTarget)
-        let changedElementIDs = result.createdElementIds + result.updatedElementIds
-        if !changedElementIDs.isEmpty || !result.deletedElementIds.isEmpty {
-            try await cameraDirector.submitMutationBatch(
-                elements: result.file.elements,
-                changedElementIDs: changedElementIDs
-            )
-        }
-
-        var mermaidResults: [ExcalidrawCore.MermaidInsertResult] = []
-        var skeletonResults: [ExcalidrawCore.SkeletonInsertResult] = []
-        var connectResults: [ExcalidrawCore.ConnectElementsResult] = []
-        for (index, action) in result.canvasActions.enumerated() {
-            do {
-                switch action {
-                    case .insertMermaid(let op):
-                        let options = ExcalidrawCore.MermaidInsertOptions(
-                            position: op.position,
-                            focus: op.focus,
-                            regenerateIds: op.regenerateIds,
-                            mermaidConfig: op.mermaidConfig,
-                            captureUpdate: op.captureUpdate
-                        )
-                        let insertResult = try await coordinator.insertFromMermaid(
-                            op.definition,
-                            options: options
-                        )
-                        mermaidResults.append(insertResult)
-                        try await cameraDirector.submitInsertedContentBounds(makeRect(from: insertResult.bounds))
-                    case .insertSkeleton(let op):
-                        let options = ExcalidrawCore.SkeletonInsertOptions(
-                            layout: op.layout,
-                            layoutOptions: op.layoutOptions,
-                            regenerateIds: op.regenerateIds,
-                            position: op.position,
-                            focus: op.focus,
-                            files: op.files,
-                            captureUpdate: op.captureUpdate,
-                            sanitize: op.sanitize
-                        )
-                        let insertResult = try await coordinator.insertFromSkeleton(
-                            op.skeletons,
-                            options: options
-                        )
-                        skeletonResults.append(insertResult)
-                        try await cameraDirector.submitInsertedContentBounds(makeRect(from: insertResult.bounds))
-                    case .connect(let op):
-                        let connectResult = try await coordinator.connectElements(
-                            from: op.from,
-                            to: op.to,
-                            arrow: op.arrow,
-                            captureUpdate: op.captureUpdate
-                        )
-                        connectResults.append(connectResult)
-                }
-            } catch {
-                throw AdjustElementsTool.CanvasActionExecutionError(
-                    index: index,
-                    action: canvasActionDescription(action),
-                    underlying: error
-                )
-            }
-        }
-        return CanvasApplyResult(
-            mermaidResults: mermaidResults,
-            skeletonResults: skeletonResults,
-            connectResults: connectResults
-        )
+        try await ExcalidrawCanvasActionApplier.apply(result, canvasTarget: canvasTarget)
     }
 
-    func makeRect(from bounds: ExcalidrawCore.MermaidBounds) -> CGRect {
-        CGRect(
-            x: bounds.x,
-            y: bounds.y,
-            width: bounds.width,
-            height: bounds.height
-        )
-    }
-
-    func canvasActionDescription(_ action: CanvasAction) -> String {
-        switch action {
-            case .insertMermaid(let op):
-                return "insertMermaid definition=\(preview(op.definition))"
-            case .insertSkeleton(let op):
-                var parts = ["insertSkeleton"]
-                if let layout = op.layout {
-                    parts.append("layout=\(layout)")
-                }
-                parts.append("skeletons=\(previewJSON(op.skeletons))")
-                return parts.joined(separator: " ")
-            case .connect(let op):
-                return "connect from=\(op.from) to=\(op.to)"
+    @MainActor
+    func makeProposalArtifactIfNeeded(
+        canvasTarget: ExcalidrawCoordinatorRegistry.CanvasTarget,
+        dryRun: Bool
+    ) async throws -> AIProposalArtifact? {
+        guard canvasTarget.targetsProposalCanvas, !dryRun else { return nil }
+        guard let data = try await CurrentExcalidrawDataResolver.resolveLiveSnapshot(
+            canvasTarget: .proposal,
+            baseContent: AIProposalSandbox.blankFileData()
+        ) else {
+            return nil
         }
-    }
-
-    func preview(_ value: String, limit: Int = 240) -> String {
-        let flattened = value
-            .replacingOccurrences(of: "\n", with: "\\n")
-            .replacingOccurrences(of: "\r", with: "\\r")
-        if flattened.count <= limit {
-            return flattened
+        let file = try ExcalidrawFile(data: data)
+        guard file.elements.contains(where: { !$0.isDeleted }) else {
+            return nil
         }
-        return String(flattened.prefix(limit)) + "...(truncated)"
+        return AIProposalArtifact(file: file)
     }
 
-    func previewJSON<T: Encodable>(_ value: T, limit: Int = 500) -> String {
-        guard let data = try? JSONEncoder().encode(value),
-              let string = String(data: data, encoding: .utf8) else {
-            return "<unavailable>"
-        }
-        return preview(string, limit: limit)
-    }
-
-    func makeElementUpdates(from element: ExcalidrawElement) throws -> [String: ExcalidrawCore.JSONValue] {
-        let data = try JSONEncoder().encode(element)
-        guard let jsonObject = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-            throw ToolError.executionFailed("Failed to encode element updates.")
-        }
-
-        let excludedKeys: Set<String> = ["id", "seed", "version", "versionNonce", "updated", "isDeleted"]
-        return try jsonObject
-            .filter { !excludedKeys.contains($0.key) }
-            .mapValues(Self.makeJSONValue(from:))
-    }
-
-    static func makeJSONValue(from value: Any) throws -> ExcalidrawCore.JSONValue {
-        switch value {
-            case let value as String:
-                return .string(value)
-            case let value as NSNumber:
-                if CFGetTypeID(value) == CFBooleanGetTypeID() {
-                    return .bool(value.boolValue)
-                }
-                return .number(value.doubleValue)
-            case let value as [Any]:
-                return .array(try value.map(makeJSONValue(from:)))
-            case let value as [String: Any]:
-                return .object(try value.mapValues(makeJSONValue(from:)))
-            case _ as NSNull:
-                return .null
-            default:
-                throw ToolError.executionFailed("Unsupported update value.")
-        }
-    }
 }
 
 struct ToolOutput: Encodable {
     let ok: Bool
     let version: String
     let dryRun: Bool
+    let canvasTarget: String
+    let assistantInstruction: String
     let opCount: Int
     let opCounts: [String: Int]
     let mermaidResults: [ExcalidrawCore.MermaidInsertResult]?
     let skeletonResults: [ExcalidrawCore.SkeletonInsertResult]?
     let connectResults: [ExcalidrawCore.ConnectElementsResult]?
+    let proposal: AIProposalArtifact?
 }
 
-private struct CanvasApplyResult {
+private struct ToolOutputSurface {
+    let canvasTarget: String
+    let assistantInstruction: String
+
+    init(canvasTarget: ExcalidrawCoordinatorRegistry.CanvasTarget) {
+        if canvasTarget.targetsProposalCanvas {
+            self.canvasTarget = "proposal"
+            self.assistantInstruction = "The changes were created on an AI proposal canvas, not in the user's file. Tell the user this is a proposal and that they can Apply it if they want it. Do not say the file or user canvas has been updated unless the user applies it."
+        } else {
+            self.canvasTarget = "user_document"
+            self.assistantInstruction = "The changes were applied directly to the user's current Excalidraw file."
+        }
+    }
+}
+
+struct CanvasApplyResult {
     var mermaidResults: [ExcalidrawCore.MermaidInsertResult] = []
     var skeletonResults: [ExcalidrawCore.SkeletonInsertResult] = []
     var connectResults: [ExcalidrawCore.ConnectElementsResult] = []
@@ -409,6 +279,12 @@ struct ToolInput: Decodable {
         case version
         case dryRun
         case ops
+    }
+
+    init(version: String? = nil, dryRun: Bool? = nil, ops: [Operation]) {
+        self.version = version
+        self.dryRun = dryRun
+        self.ops = ops
     }
 
     static func decodeLeniently(from data: Data) throws -> ToolInput {

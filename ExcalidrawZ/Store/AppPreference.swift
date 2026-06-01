@@ -147,6 +147,10 @@ final class AppPreference: ObservableObject {
 
     var customDrawingSettings: UserDrawingSettings {
         get {
+            guard !customDrawingSettingsData.isEmpty else {
+                return UserDrawingSettings()
+            }
+
             do {
                 let settings = try JSONDecoder().decode(UserDrawingSettings.self, from: customDrawingSettingsData)
                 return settings

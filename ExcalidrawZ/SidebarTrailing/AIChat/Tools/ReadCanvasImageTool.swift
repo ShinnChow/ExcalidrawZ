@@ -16,8 +16,10 @@ import LLMCore
 struct ReadCanvasImageTool: Tool {
     struct ReadCanvasImageContext: ToolContext {
         var canvasTarget: ExcalidrawCoordinatorRegistry.CanvasTarget
+        var readCanvasTarget: ExcalidrawCoordinatorRegistry.CanvasTarget?
         var currentModelSupportsImageInput: Bool?
         var currentFileID: UUID? = nil
+        var isCurrentFileContextProtected: Bool = false
     }
 
     var name: String { "read_canvas_image" }
@@ -26,12 +28,12 @@ struct ReadCanvasImageTool: Tool {
 
     var description: String {
         """
-        Take a PNG snapshot of the current Excalidraw canvas and return it as
-        an image. Locked files are inaccessible. Use this when you need to
-        visually inspect the canvas —
-        layout, spatial relationships, hand-drawn details, colors — anything
-        the structural `read_file` tool can't capture. No arguments required;
-        always returns the full canvas at the user's current viewport scale.
+        Take a PNG snapshot of the current Excalidraw file when file context
+        is available and return it as an image. Use this when you need to
+        visually inspect the canvas: layout, spatial relationships, hand-drawn
+        details, colors, or anything the structural `read_file` tool cannot
+        capture. No arguments required; always returns the full canvas at the
+        user's current viewport scale.
         """
     }
 
@@ -46,6 +48,9 @@ struct ReadCanvasImageTool: Tool {
             throw ToolError.executionFailed("Missing ReadCanvasImageContext")
         }
         let canvasContext = try context.resolve(ReadCanvasImageContext.self)
+        guard !canvasContext.isCurrentFileContextProtected else {
+            return LockedContentAIGuard.lockedToolResult
+        }
         guard try await LockedContentAIGuard.canToolAccess(fileID: canvasContext.currentFileID) else {
             return LockedContentAIGuard.lockedToolResult
         }
@@ -54,9 +59,8 @@ struct ReadCanvasImageTool: Tool {
             return .text("The current model cannot read image tool results. Use read_file for structural canvas data instead.")
         }
 
-        let coordinator = await MainActor.run {
-            ExcalidrawCoordinatorRegistry.shared.coordinator(for: canvasContext.canvasTarget)
-        }
+        let canvasTarget = canvasContext.readCanvasTarget ?? canvasContext.canvasTarget
+        let coordinator = try await ExcalidrawCoordinatorRegistry.shared.resolvedCoordinator(for: canvasTarget)
         guard let coordinator else {
             throw ToolError.executionFailed("Missing active Excalidraw coordinator")
         }

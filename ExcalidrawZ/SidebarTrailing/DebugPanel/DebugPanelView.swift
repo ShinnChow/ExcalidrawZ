@@ -97,6 +97,8 @@ struct DebugPanelView: View {
                 fileState.excalidrawWebCoordinator
             case .collaboration:
                 fileState.excalidrawCollaborationWebCoordinator
+            case .proposal:
+                nil
         }
     }
 

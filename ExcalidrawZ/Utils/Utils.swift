@@ -49,42 +49,95 @@ func getBackupsDir() throws -> URL {
     return backupsDir
 }
 
-func backupFiles(context: NSManagedObjectContext) async throws {
+enum BackupFilesReason {
+    case regular
+    case unlockedContent
+
+    var replacesExistingToday: Bool {
+        switch self {
+            case .regular:
+                false
+            case .unlockedContent:
+                true
+        }
+    }
+}
+
+@discardableResult
+func backupFiles(
+    context: NSManagedObjectContext,
+    reason: BackupFilesReason = .regular
+) async throws -> Bool {
     let fileManager = FileManager.default
     let backupsDir = try getBackupsDir()
+    let replaceExistingToday = reason.replacesExistingToday
 
     let today = Date()
     let formatter = DateFormatter()
     formatter.dateFormat = "yyyy-MM-dd"
-    let exportURL = backupsDir.appendingPathComponent(formatter.string(from: today), conformingTo: .directory)
-    if fileManager.fileExists(at: exportURL) { return }
+    let backupFolderName = formatter.string(from: today)
+    let exportURL = backupsDir.appendingPathComponent(backupFolderName, conformingTo: .directory)
+    let existingBackupExists = fileManager.fileExists(at: exportURL)
+    if existingBackupExists && !replaceExistingToday { return false }
 
-    if try await cloudBackupHasLockedContentUnavailable(context: context) {
-        print("[Backup Files] Skipping backup: locked files are not unlocked.")
-        return
+    switch reason {
+        case .regular:
+            if try await cloudBackupHasEncryptedContent(context: context) {
+                print("[Backup Files] Skipping regular backup: encrypted files exist.")
+                return false
+            }
+        case .unlockedContent:
+            if try await cloudBackupHasLockedContentUnavailable(context: context) {
+                print("[Backup Files] Skipping unlock-triggered backup: locked files are not unlocked.")
+                return false
+            }
+    }
+
+    let workingExportURL: URL
+    if replaceExistingToday {
+        workingExportURL = backupsDir.appendingPathComponent(
+            ".\(backupFolderName)-staging-\(UUID().uuidString)",
+            conformingTo: .directory
+        )
+    } else {
+        workingExportURL = exportURL
+    }
+    var didInstallWorkingBackup = !replaceExistingToday
+    defer {
+        if replaceExistingToday && !didInstallWorkingBackup {
+            try? fileManager.removeItem(at: workingExportURL)
+        }
     }
 
     // Cloud
-    let cloudExportURL = exportURL.appendingPathComponent("Cloud", conformingTo: .directory)
+    let cloudExportURL = workingExportURL.appendingPathComponent("Cloud", conformingTo: .directory)
     do {
         print("[Backup Files] Start... \(cloudExportURL)")
         try fileManager.createDirectory(at: cloudExportURL, withIntermediateDirectories: true)
         try await backupAllCloudFiles(to: cloudExportURL, context: context)
     } catch let error as EncryptedContentError where error.isContentLocked {
         print("[Backup Files] Skipping backup: locked files are not unlocked.")
-        try? fileManager.removeItem(at: exportURL)
-        return
+        try? fileManager.removeItem(at: workingExportURL)
+        return false
     } catch {
         print("[Backup Files] backup cloud files done, but with error: \(error)")
     }
     // Local
-    let localExportURL = exportURL.appendingPathComponent("Local", conformingTo: .directory)
+    let localExportURL = workingExportURL.appendingPathComponent("Local", conformingTo: .directory)
     do {
         print("[Backup Files] Start... \(localExportURL)")
         try fileManager.createDirectory(at: localExportURL, withIntermediateDirectories: true)
         try await backupLocalFolders(to: localExportURL)
     } catch {
         print("[Backup Files] backup local files done, but with error: \(error)")
+    }
+
+    if replaceExistingToday {
+        if existingBackupExists {
+            try fileManager.removeItem(at: exportURL)
+        }
+        try fileManager.moveItem(at: workingExportURL, to: exportURL)
+        didInstallWorkingBackup = true
     }
     
     // clean
@@ -131,6 +184,8 @@ func backupFiles(context: NSManagedObjectContext) async throws {
             print(error)
         }
     }
+
+    return true
 }
 
 private func backupLocalFolders(to localExportURL: URL) async throws {

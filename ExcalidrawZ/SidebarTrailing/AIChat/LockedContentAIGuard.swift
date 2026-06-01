@@ -12,7 +12,7 @@ import LLMCore
 enum LockedContentAIError: LocalizedError {
     case lockedFile
 
-    static let message = "This file is locked. AI cannot access locked file content, even while the file is temporarily unlocked for you."
+    static let message = AIFileAccessStatusMessage.protectedContentAccessDenied
 
     var errorDescription: String? {
         switch self {
@@ -20,6 +20,24 @@ enum LockedContentAIError: LocalizedError {
                 return Self.message
         }
     }
+}
+
+enum AIFileAccessStatusMessage {
+    static let noActiveFile = "No file is currently open in ExcalidrawZ."
+    static let activeFileReadable = "A file is currently open in ExcalidrawZ, and AI file access is available for this request."
+
+    static let protectedContentAccessDenied = """
+    A file is currently open in ExcalidrawZ, but AI file access is disabled \
+    or the file is protected. AI cannot access its content, canvas image, \
+    selected elements, or file data. Protected file content remains unavailable \
+    to AI even while it is temporarily unlocked for you. Canvas edits are \
+    created on an AI proposal canvas for the user to Apply if they want them.
+    """
+
+    static let unreadableFilesOmitted = """
+    Files that AI cannot access are omitted. Use file_access_status to check \
+    the current file access state.
+    """
 }
 
 enum LockedContentAIGuard {
@@ -38,9 +56,13 @@ enum LockedContentAIGuard {
 
     static func lockedToolResultIfNeeded(
         input: String,
-        context: (any ChatInvocationContext)?
+        context: (any ChatInvocationContext)?,
+        toolName: String
     ) async throws -> ToolResult? {
-        if let currentFileID = (context as? ExcalidrawChatInvocationContext)?.currentFileID,
+        let excalidrawContext = context as? ExcalidrawChatInvocationContext
+
+        if requiresCurrentFileAccessCheck(toolName: toolName, context: excalidrawContext),
+           let currentFileID = excalidrawContext?.currentFileID,
            !(try await canToolAccess(fileID: currentFileID)) {
             return lockedToolResult
         }
@@ -57,6 +79,12 @@ enum LockedContentAIGuard {
     static func ensureAIReadable(activeFile: FileState.ActiveFile?) async throws {
         guard case .file(let file) = activeFile else { return }
         try await ensureAIReadable(fileObjectID: file.objectID)
+    }
+
+    @MainActor
+    static func canAIRead(activeFile: FileState.ActiveFile?) async -> Bool {
+        guard case .file(let file) = activeFile else { return true }
+        return (try? await isAIReadable(fileObjectID: file.objectID)) ?? false
     }
 
     static func ensureAIReadable(fileID: UUID?) async throws {
@@ -86,6 +114,22 @@ enum LockedContentAIGuard {
         return try await isAIReadable(fileObjectID: fileObjectID)
     }
 
+    static func canToolAccess(
+        canvasTarget: ExcalidrawCoordinatorRegistry.CanvasTarget,
+        currentFileID: UUID?
+    ) async throws -> Bool {
+        guard canvasTarget.targetsUserCanvas else { return true }
+        return try await canToolAccess(fileID: currentFileID)
+    }
+
+    static func ensureAIReadable(
+        canvasTarget: ExcalidrawCoordinatorRegistry.CanvasTarget,
+        currentFileID: UUID?
+    ) async throws {
+        guard canvasTarget.targetsUserCanvas else { return }
+        try await ensureAIReadable(fileID: currentFileID)
+    }
+
     static func canToolAccess(fileObjectID: NSManagedObjectID?) async throws -> Bool {
         guard let fileObjectID else { return true }
         return try await isAIReadable(fileObjectID: fileObjectID)
@@ -103,6 +147,18 @@ enum LockedContentAIGuard {
         let isProtected = try await PersistenceController.shared.fileRepository
             .isFileContentProtected(fileObjectID: fileObjectID)
         return !isProtected
+    }
+
+    private static let proposalCanvasWriteToolNames: Set<String> = [
+        "adjust_elements",
+    ]
+
+    private static func requiresCurrentFileAccessCheck(
+        toolName: String,
+        context: ExcalidrawChatInvocationContext?
+    ) -> Bool {
+        !(proposalCanvasWriteToolNames.contains(toolName)
+          && context?.canvasTarget.targetsProposalCanvas == true)
     }
 
     private static func fileObjectID(for fileID: UUID) async throws -> NSManagedObjectID? {

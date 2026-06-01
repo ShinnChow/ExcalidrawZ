@@ -33,18 +33,29 @@ enum CurrentExcalidrawDataResolver {
         baseContent: Data?,
         currentFileID: UUID? = nil
     ) async throws -> Data? {
-        try await LockedContentAIGuard.ensureAIReadable(fileID: currentFileID)
-
-        guard let coordinator = ExcalidrawCoordinatorRegistry.shared.coordinator(for: canvasTarget) else {
-            return baseContent
+        try await LockedContentAIGuard.ensureAIReadable(
+            canvasTarget: canvasTarget,
+            currentFileID: currentFileID
+        )
+        let coordinator = try await ExcalidrawCoordinatorRegistry.shared.resolvedCoordinator(for: canvasTarget)
+        let resolvedBaseContent = resolvedBaseContent(for: canvasTarget, provided: baseContent)
+        guard let coordinator else {
+            return resolvedBaseContent
         }
 
         let snapshot = try await coordinator.getCurrentFileSnapshot()
         if let snapshotData = snapshot.dataString.data(using: .utf8) {
-            return try mergeLiveSceneData(snapshotData, into: baseContent)
+            return try mergeLiveSceneData(snapshotData, into: resolvedBaseContent)
         }
 
-        return baseContent
+        return resolvedBaseContent
+    }
+
+    private static func resolvedBaseContent(
+        for canvasTarget: ExcalidrawCoordinatorRegistry.CanvasTarget,
+        provided baseContent: Data?
+    ) -> Data? {
+        baseContent ?? (canvasTarget.targetsProposalCanvas ? AIProposalSandbox.blankFileData() : nil)
     }
 
     @MainActor

@@ -23,7 +23,7 @@ struct ListAllFilesTool: Tool {
     var description: String {
         """
         List available drawing files in the user's library (iCloud-synced \
-        files only — local-folder files and locked files aren't included). \
+        files only; local-folder files are not included). \
         Each entry returns id, name, group, last-modified, and trash status. \
         Use this to pick a file id for `query_file_history` / \
         `restore_file_history`.
@@ -83,7 +83,7 @@ struct ListAllFilesTool: Tool {
         }
 
         var entries: [FileEntry] = []
-        var omittedLockedFiles = 0
+        var omittedUnreadableFiles = 0
         for candidate in candidates {
             let isReadable: Bool
             do {
@@ -94,7 +94,7 @@ struct ListAllFilesTool: Tool {
             if isReadable {
                 entries.append(candidate.entry)
             } else {
-                omittedLockedFiles += 1
+                omittedUnreadableFiles += 1
             }
         }
 
@@ -102,8 +102,8 @@ struct ListAllFilesTool: Tool {
             files: entries,
             returned: entries.count,
             limit: limit,
-            omittedLockedFiles: omittedLockedFiles,
-            lockedFilesPolicy: "Locked files are omitted because AI cannot access locked file content."
+            omittedUnreadableFiles: omittedUnreadableFiles,
+            unreadableFilesPolicy: AIFileAccessStatusMessage.unreadableFilesOmitted
         )
         let data = try JSONEncoder().encode(payload)
         return .text(String(data: data, encoding: .utf8) ?? "[]")
@@ -133,15 +133,15 @@ struct ListAllFilesTool: Tool {
         let files: [FileEntry]
         let returned: Int
         let limit: Int
-        let omittedLockedFiles: Int
-        let lockedFilesPolicy: String
+        let omittedUnreadableFiles: Int
+        let unreadableFilesPolicy: String
 
         enum CodingKeys: String, CodingKey {
             case files
             case returned
             case limit
-            case omittedLockedFiles = "omitted_locked_files"
-            case lockedFilesPolicy = "locked_files_policy"
+            case omittedUnreadableFiles = "omitted_unreadable_files"
+            case unreadableFilesPolicy = "unreadable_files_policy"
         }
     }
 

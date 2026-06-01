@@ -127,6 +127,7 @@ struct ExcalidrawZApp: App {
             WebFetchTool(),
             CalculatorTool(),
             DateTimeTool(),
+            FileAccessStatusTool(),
             ReadFileTool(),
             ReadCanvasImageTool(),
             AdjustElementsTool(),

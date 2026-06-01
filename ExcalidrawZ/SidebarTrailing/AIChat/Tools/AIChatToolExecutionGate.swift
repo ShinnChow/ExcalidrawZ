@@ -33,7 +33,8 @@ struct LockedContentProtectedTool: Tool {
     func execute(_ input: String, context: (any ChatInvocationContext)?) async throws -> ToolResult {
         if let lockedToolResult = try await LockedContentAIGuard.lockedToolResultIfNeeded(
             input: input,
-            context: context
+            context: context,
+            toolName: tool.name
         ) {
             return lockedToolResult
         }

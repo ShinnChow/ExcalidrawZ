@@ -25,7 +25,7 @@
       "location" : "https://github.com/chocoford/ChocofordKit.git",
       "state" : {
         "branch" : "main",
-        "revision" : "7623a5934efdcf5d130e6ee28444fc67d22adaf8"
+        "revision" : "bf050572cec4c00697c7b2eac6ed4bb5d69b7daf"
       }
     },
     {
@@ -69,8 +69,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/chocoford/LLMKit.git",
       "state" : {
-        "branch" : "main",
-        "revision" : "2a76190635fc1a90b6dcf0bd0527b9cee70988e3"
+        "branch" : "dev",
+        "revision" : "64619818c11a61f7e8d9f61222f549bc1a648b4a"
       }
     },
     {

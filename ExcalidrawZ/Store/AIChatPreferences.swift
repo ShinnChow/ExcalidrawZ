@@ -23,6 +23,15 @@
 import Foundation
 import LLMCore
 
+enum AIChatInteractionMode: String, Codable, Sendable {
+    case ask
+    case agent
+
+    var usesMutationSession: Bool {
+        self == .agent
+    }
+}
+
 @MainActor
 final class AIChatPreferences: ObservableObject {
     static let shared = AIChatPreferences()
@@ -48,6 +57,18 @@ final class AIChatPreferences: ObservableObject {
         didSet { saveDefaultTier() }
     }
 
+    /// Legacy storage values: `.agent` means AI can access and edit the
+    /// current file, while `.ask` means no current-file access and edits
+    /// go through a proposal canvas.
+    @Published var interactionMode: AIChatInteractionMode {
+        didSet { saveInteractionMode() }
+    }
+
+    var allowsFileAccess: Bool {
+        get { interactionMode == .agent }
+        set { interactionMode = newValue ? .agent : .ask }
+    }
+
     /// Per-conversation tier picks, keyed by conversation id. Updated
     /// from `PromptInputView`'s inline picker; the side-effect goes
     /// through `setTier(_:for:)` so persistence stays in one place.
@@ -55,6 +76,7 @@ final class AIChatPreferences: ObservableObject {
 
     private let defaultTierKey = "AIChat.defaultModelTier"
     private let overridesTierKey = "AIChat.conversationModelTierOverrides"
+    private let interactionModeKey = "AIChat.interactionMode"
 
     /// Legacy concrete-model keys. Kept only for one-way migration from
     /// versions that persisted a specific upstream model instead of a tier.
@@ -73,6 +95,13 @@ final class AIChatPreferences: ObservableObject {
             self.defaultTier = tier
         } else {
             self.defaultTier = .medium
+        }
+
+        if let raw = defaults.string(forKey: interactionModeKey),
+           let mode = AIChatInteractionMode(rawValue: raw) {
+            self.interactionMode = mode
+        } else {
+            self.interactionMode = .agent
         }
 
         if let dict = defaults.dictionary(forKey: overridesTierKey) as? [String: String] {
@@ -115,6 +144,10 @@ final class AIChatPreferences: ObservableObject {
 
     private func saveDefaultTier() {
         UserDefaults.standard.set(defaultTier.rawValue, forKey: defaultTierKey)
+    }
+
+    private func saveInteractionMode() {
+        UserDefaults.standard.set(interactionMode.rawValue, forKey: interactionModeKey)
     }
 
     private func saveTierOverrides() {

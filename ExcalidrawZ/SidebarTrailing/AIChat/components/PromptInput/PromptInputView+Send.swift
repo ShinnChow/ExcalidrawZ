@@ -160,6 +160,7 @@ extension PromptInputView {
     /// (success or failure) it clears the slot and drains the queue.
     func startSend(prompt: String, files: [ChatMessageContent.File] = []) {
         guard AIChatAvailability.canUseAI else { return }
+        let preferredInteractionMode = prefs.interactionMode
         let newConversationID = UUID().uuidString
         let conversationIDForSession: String = self.conversationID ?? newConversationID
         aiChatState.clearGenerationCancellation(for: conversationIDForSession)
@@ -188,36 +189,6 @@ extension PromptInputView {
                 await MainActor.run {
                     aiChatState.clearTransientError(for: conversationIDForSession)
                 }
-                await MainActor.run {
-                    ExcalidrawCoordinatorRegistry.shared.update(
-                        normal: fileState.excalidrawWebCoordinator,
-                        collaboration: fileState.excalidrawCollaborationWebCoordinator
-                    )
-                }
-                let canvasTarget: ExcalidrawCoordinatorRegistry.CanvasTarget = {
-                    switch fileState.currentActiveFile {
-                        case .collaborationFile:
-                            .collaboration
-                        default:
-                            .normal
-                    }
-                }()
-                let selectedElementIDs: [String]? = await MainActor.run {
-                    let coordinator: ExcalidrawCanvasView.Coordinator? = switch canvasTarget {
-                        case .normal:
-                            fileState.excalidrawWebCoordinator
-                        case .collaboration:
-                            fileState.excalidrawCollaborationWebCoordinator
-                    }
-                    let ids = coordinator?.selectedElementIDs ?? []
-                    return ids.isEmpty ? nil : ids
-                }
-                let currentFileID: UUID? = await MainActor.run {
-                    if case .file(let file) = fileState.currentActiveFile {
-                        return file.id
-                    }
-                    return nil
-                }
                 // Make sure agent config is loaded so `activeModel` resolves to the
                 // server-blessed default (or the user's picker selection) rather
                 // than the hard-coded fallback.
@@ -226,28 +197,32 @@ extension PromptInputView {
                 let model = await MainActor.run { modelForSend(files: files) }
                 attemptedModel = model
                 let isNewConversation = self.conversation == nil
+                let canIncludeActiveFileContext = await activeFileAllowsAIContext()
+                let invocationPlan = await AIChatInvocationPlan.make(
+                    fileState: fileState,
+                    preferredInteractionMode: preferredInteractionMode,
+                    includesCurrentFileContext: canIncludeActiveFileContext
+                )
                 if !isNewConversation {
                     try await refreshExistingConversationToolsIfNeeded(
                         conversationID: conversationIDForSession,
-                        model: model
+                        model: model,
+                        mode: invocationPlan.interactionMode,
+                        includesCurrentFileContext: invocationPlan.includesCurrentFileContext
                     )
                 }
                 try await LockedContentAIGuard.withProtectedContentAccessDenied {
                     guard AIChatAvailability.canUseAI else { throw CancellationError() }
-                    let context = try await ExcalidrawChatInvocationContext(
-                        currentFileData: currentFileData,
-                        canvasTarget: canvasTarget,
-                        selectedElementIDs: selectedElementIDs,
-                        currentFileID: currentFileID,
-                        currentModelSupportsImageInput: model.supportsExcalidrawImageInput
+                    let context = try await invocationPlan.makeContext(
+                        fileState: fileState,
+                        model: model
                     )
                     let metadata = await makeTransactionMetadata(
                         conversationID: conversationIDForSession,
                         userMessageID: userMessageID,
                         requestKind: isNewConversation ? .createConversation : .sendMessage,
                         model: model,
-                        canvasTarget: canvasTarget,
-                        selectedElementCount: selectedElementIDs?.count ?? 0,
+                        invocationPlan: invocationPlan,
                         attachmentCount: files.count,
                         hasCurrentFileData: context.currentFileData != nil,
                         isNewConversation: isNewConversation
@@ -258,11 +233,13 @@ extension PromptInputView {
                     // file as `.aiPre` (anchored to this user message) and
                     // flips suppression on so all canvas mutations during
                     // the round don't write to user history.
-                    try await fileState.beginAIChatSession(
-                        conversationID: conversationIDForSession,
-                        userMessageID: userMessageID
-                    )
-                    sessionOpened = true
+                    if invocationPlan.usesMutationSession {
+                        try await fileState.beginAIChatSession(
+                            conversationID: conversationIDForSession,
+                            userMessageID: userMessageID
+                        )
+                        sessionOpened = true
+                    }
 
                     if isNewConversation {
                         self.conversationID = newConversationID
@@ -285,7 +262,9 @@ extension PromptInputView {
                             // `ExcalidrawAgentConfig` so the persistence
                             // restore path uses the exact same wiring.
                             agentConfig: ExcalidrawAgentConfig.defaultConfig(
-                                supportsImageInput: model.supportsExcalidrawImageInput
+                                mode: invocationPlan.interactionMode,
+                                supportsImageInput: model.supportsExcalidrawImageInput,
+                                includesCurrentFileContext: invocationPlan.includesCurrentFileContext
                             ),
                             messages: [.content(userMessage)],
                             metadata: metadata,
@@ -393,10 +372,14 @@ extension PromptInputView {
 
     private func refreshExistingConversationToolsIfNeeded(
         conversationID: String,
-        model: SupportedModel
+        model: SupportedModel,
+        mode: AIChatInteractionMode,
+        includesCurrentFileContext: Bool
     ) async throws {
         let tools = ExcalidrawAgentConfig.toolNames(
-            supportsImageInput: model.supportsExcalidrawImageInput
+            mode: mode,
+            supportsImageInput: model.supportsExcalidrawImageInput,
+            includesCurrentFileContext: includesCurrentFileContext
         )
         let currentTools = await MainActor.run {
             conversation?.agentConfig.tools
@@ -415,14 +398,15 @@ extension PromptInputView {
         userMessageID: String,
         requestKind: ExcalidrawAITransactionRequestKind,
         model: SupportedModel,
-        canvasTarget: ExcalidrawCoordinatorRegistry.CanvasTarget,
-        selectedElementCount: Int,
+        invocationPlan: AIChatInvocationPlan,
         attachmentCount: Int,
         hasCurrentFileData: Bool,
         isNewConversation: Bool
     ) async -> ExcalidrawAITransactionMetadata {
         let fileContext = await MainActor.run {
-            transactionFileContext(for: fileState.currentActiveFile)
+            invocationPlan.includesCurrentFileContext
+                ? transactionFileContext(for: fileState.currentActiveFile)
+                : (id: nil, name: nil, kind: nil)
         }
 
         return ExcalidrawAITransactionMetadata(
@@ -433,11 +417,11 @@ extension PromptInputView {
             requestKind: requestKind,
             agentID: agentID,
             model: model.rawValue,
-            canvasTarget: canvasTarget.rawValue,
+            canvasTarget: invocationPlan.toolCanvasTarget.rawValue,
             fileID: fileContext.id,
             fileName: fileContext.name,
             fileKind: fileContext.kind,
-            selectedElementCount: selectedElementCount,
+            selectedElementCount: invocationPlan.selectedElementCount,
             attachmentCount: attachmentCount,
             hasCurrentFileData: hasCurrentFileData,
             isNewConversation: isNewConversation

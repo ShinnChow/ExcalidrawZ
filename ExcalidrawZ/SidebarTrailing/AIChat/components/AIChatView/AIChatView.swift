@@ -121,10 +121,17 @@ struct AIChatView: View {
         AIChatAvailability.isAvailable
     }
 
+    @MainActor
+    func activeFileAllowsAIContext() async -> Bool {
+        guard prefs.allowsFileAccess else { return false }
+        guard fileState.currentActiveFile != nil else { return false }
+        return await LockedContentAIGuard.canAIRead(activeFile: fileState.currentActiveFile)
+    }
+
     var shouldBlockAIForPreference: Bool {
         !prefs.isAIEnabled
     }
-    
+
     var body: some View {
         let _ = AIChatRenderDebug.hit("AIChatView.body")
 
@@ -349,6 +356,10 @@ struct AIChatView: View {
         // Cancel any in-flight stream so its trailing message commit
         // doesn't land in a just-cleared conversation.
         llmState.cancelGeneration(conversationID: id)
+        aiChatState.clearTransientError(for: id)
+        aiChatState.clearGenerationCancellation(for: id)
+        aiChatState.unmarkCompacting(conversationID: id)
+        aiChatState.cancelEditing(conversationID: id)
         Task {
             do {
                  try await llmState.clearConversation(id)

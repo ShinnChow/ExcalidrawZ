@@ -30,12 +30,126 @@ import ChocofordUI
 import LLMKit
 import LLMCore
 
-struct ExcalidrawChatInvocationContext: ChatInvocationContext {
+struct ExcalidrawChatInvocationContext: ChatInvocationContext, Sendable {
     var currentFileData: Data?
     var canvasTarget: ExcalidrawCoordinatorRegistry.CanvasTarget
+    var readCanvasTarget: ExcalidrawCoordinatorRegistry.CanvasTarget? = nil
     var selectedElementIDs: [String]? = nil
     var currentFileID: UUID? = nil
+    var hasActiveFile: Bool = false
     var currentModelSupportsImageInput: Bool = true
+    var isCurrentFileContextProtected: Bool = false
+}
+
+struct AIChatInvocationPlan: Sendable {
+    let interactionMode: AIChatInteractionMode
+    let userCanvasTarget: ExcalidrawCoordinatorRegistry.CanvasTarget
+    let toolCanvasTarget: ExcalidrawCoordinatorRegistry.CanvasTarget
+    let readCanvasTarget: ExcalidrawCoordinatorRegistry.CanvasTarget
+    let includesCurrentFileContext: Bool
+    let hasActiveFile: Bool
+    let selectedElementIDs: [String]?
+    let currentFileID: UUID?
+
+    var requiresFreshToolCanvas: Bool {
+        toolCanvasTarget.targetsProposalCanvas
+    }
+
+    var usesMutationSession: Bool {
+        interactionMode.usesMutationSession
+    }
+
+    var selectedElementCount: Int {
+        includesCurrentFileContext ? selectedElementIDs?.count ?? 0 : 0
+    }
+
+    var isCurrentFileContextProtected: Bool {
+        hasActiveFile && !includesCurrentFileContext
+    }
+
+    @MainActor
+    static func make(
+        fileState: FileState,
+        preferredInteractionMode: AIChatInteractionMode,
+        includesCurrentFileContext: Bool
+    ) -> Self {
+        ExcalidrawCoordinatorRegistry.shared.update(
+            normal: fileState.excalidrawWebCoordinator,
+            collaboration: fileState.excalidrawCollaborationWebCoordinator
+        )
+
+        let activeFile = fileState.currentActiveFile
+        let userCanvasTarget: ExcalidrawCoordinatorRegistry.CanvasTarget = {
+            switch activeFile {
+                case .collaborationFile:
+                    .collaboration
+                default:
+                    .normal
+            }
+        }()
+        let interactionMode: AIChatInteractionMode = includesCurrentFileContext
+            ? preferredInteractionMode
+            : .ask
+        let toolCanvasTarget: ExcalidrawCoordinatorRegistry.CanvasTarget = interactionMode == .ask
+            ? .proposal
+            : userCanvasTarget
+        let coordinator: ExcalidrawCanvasView.Coordinator? = switch userCanvasTarget {
+            case .normal:
+                fileState.excalidrawWebCoordinator
+            case .collaboration:
+                fileState.excalidrawCollaborationWebCoordinator
+            case .proposal:
+                nil
+        }
+        let ids = coordinator?.selectedElementIDs ?? []
+        let currentFileID: UUID? = {
+            if case .file(let file) = activeFile {
+                return file.id
+            }
+            return nil
+        }()
+
+        return AIChatInvocationPlan(
+            interactionMode: interactionMode,
+            userCanvasTarget: userCanvasTarget,
+            toolCanvasTarget: toolCanvasTarget,
+            readCanvasTarget: userCanvasTarget,
+            includesCurrentFileContext: includesCurrentFileContext,
+            hasActiveFile: activeFile != nil,
+            selectedElementIDs: ids.isEmpty ? nil : ids,
+            currentFileID: currentFileID
+        )
+    }
+
+    @MainActor
+    func makeContext(
+        fileState: FileState,
+        model: SupportedModel
+    ) async throws -> ExcalidrawChatInvocationContext {
+        if requiresFreshToolCanvas {
+            await AIProposalSandbox.resetCanvasIfAvailable()
+        }
+
+        let currentFileData: Data? = if includesCurrentFileContext {
+            try await CurrentExcalidrawDataResolver.resolve(
+                fileState: fileState,
+                canvasTarget: userCanvasTarget
+            )
+        } else {
+            nil
+        }
+
+        return ExcalidrawChatInvocationContext(
+            currentFileData: currentFileData,
+            canvasTarget: toolCanvasTarget,
+            readCanvasTarget: readCanvasTarget,
+            selectedElementIDs: includesCurrentFileContext ? selectedElementIDs : nil,
+            currentFileID: includesCurrentFileContext ? currentFileID : nil,
+            hasActiveFile: hasActiveFile,
+            currentModelSupportsImageInput: model.supportsExcalidrawImageInput,
+            isCurrentFileContextProtected: isCurrentFileContextProtected
+        )
+    }
 }
 
 struct AIChatInputCapabilityError: LocalizedError {
@@ -56,6 +170,7 @@ struct PromptInputView<Background: View, Header: View>: View {
     @EnvironmentObject var fileState: FileState
     @EnvironmentObject var aiChatState: AIChatState
     @EnvironmentObject var store: Store
+    @EnvironmentObject var lockedContentState: LockedContentStateStore
     @Environment(\.alertToast) var alertToast
 
     @Binding var conversationID: String?
@@ -115,6 +230,30 @@ struct PromptInputView<Background: View, Header: View>: View {
     /// view, the persistence layer's restore path, and any future agent
     /// callers can't drift apart.
     var agentID: String { ExcalidrawAgentConfig.agentID }
+
+    @MainActor
+    var activeFileAccessAllowsAI: Bool {
+        hasActiveFileForAIAccessControl
+            && canToggleAIFileAccess
+            && prefs.allowsFileAccess
+    }
+
+    @MainActor
+    var hasActiveFileForAIAccessControl: Bool {
+        fileState.currentActiveFile != nil
+    }
+
+    @MainActor
+    var canToggleAIFileAccess: Bool {
+        lockedContentState.activeFileLockState == .plaintext
+    }
+
+    @MainActor
+    func activeFileAllowsAIContext() async -> Bool {
+        guard prefs.allowsFileAccess else { return false }
+        guard fileState.currentActiveFile != nil else { return false }
+        return await LockedContentAIGuard.canAIRead(activeFile: fileState.currentActiveFile)
+    }
 
     /// Resolved model used for the next request, in priority order:
     ///   1. Per-conversation override stored in `AIChatPreferences`
@@ -280,23 +419,6 @@ struct PromptInputView<Background: View, Header: View>: View {
         }
     }
 
-    var currentFileData: Data? {
-        get async throws {
-            let canvasTarget: ExcalidrawCoordinatorRegistry.CanvasTarget = {
-                switch fileState.currentActiveFile {
-                    case .collaborationFile:
-                        .collaboration
-                    default:
-                        .normal
-                }
-            }()
-            return try await CurrentExcalidrawDataResolver.resolve(
-                fileState: fileState,
-                canvasTarget: canvasTarget
-            )
-        }
-    }
-
     /// True when this view's conversation is currently being compacted.
     /// Derived from the app-scoped `AIChatState.compactingConversationIDs`
     /// set rather than a local @State so `AIChatView` can render the
@@ -373,7 +495,7 @@ struct PromptInputView<Background: View, Header: View>: View {
 #if os(macOS)
                     if #available(macOS 14.0, *) {
                         actionBarLeading()
-                            .buttonBorderShape(.roundedRectangle(radius: 6))
+//                            .buttonBorderShape(.roundedRectangle(radius: 6))
                             .buttonStyle(.accessoryBar)
                     } else {
                         actionBarLeading()

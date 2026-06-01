@@ -74,24 +74,28 @@ struct BackupFoldersView: View {
                 )
             }
         }
-        .onAppear {
-            do {
-                self.content = try FileManager.default.contentsOfDirectory(
-                    at: folder,
-                    includingPropertiesForKeys: [.nameKey, .isDirectoryKey],
-                    options: .skipsHiddenFiles
+        .task(id: folder) {
+            loadContent()
+        }
+    }
+
+    private func loadContent() {
+        do {
+            self.content = try FileManager.default.contentsOfDirectory(
+                at: folder,
+                includingPropertiesForKeys: [.nameKey, .isDirectoryKey],
+                options: .skipsHiddenFiles
+            )
+            .map { url in
+                let isDirectory = (try? url.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true
+                return BackupFolderItem(
+                    url: url,
+                    isDirectory: isDirectory,
+                    isEncrypted: isDirectory ? false : isLegacyLockedBackupFile(url)
                 )
-                .map { url in
-                    let isDirectory = (try? url.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true
-                    return BackupFolderItem(
-                        url: url,
-                        isDirectory: isDirectory,
-                        isEncrypted: isDirectory ? false : isLegacyLockedBackupFile(url)
-                    )
-                }
-            } catch {
-                alertToast(error)
             }
+        } catch {
+            alertToast(error)
         }
     }
 
