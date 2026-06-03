@@ -158,6 +158,25 @@ extension LocalFolder {
     private static func filePath(_ filePath: String, isContainedInFolderPath folderPath: String) -> Bool {
         filePath == folderPath || filePath.hasPrefix(folderPath + "/")
     }
+
+    private static func localFolder(
+        for url: URL,
+        parent: LocalFolder,
+        context: NSManagedObjectContext
+    ) throws -> LocalFolder {
+        let fetchRequest = NSFetchRequest<LocalFolder>(entityName: "LocalFolder")
+        fetchRequest.predicate = NSPredicate(format: "filePath == %@", url.filePath)
+        fetchRequest.fetchLimit = 1
+
+        if let existingFolder = try context.fetch(fetchRequest).first {
+            existingFolder.parent = parent
+            return existingFolder
+        }
+
+        let child = try LocalFolder(url: url, context: context)
+        child.parent = parent
+        return child
+    }
     
     func refreshChildren(context: NSManagedObjectContext) throws {
         try self.withSecurityScopedURL { url in
@@ -188,8 +207,8 @@ extension LocalFolder {
                     }) == true {
                         continue
                     }
-                    /// Otherwise, create a new LocalFolder instance and add it to children
-                    let child = try LocalFolder(url: url, context: context)
+                    /// Otherwise, create/reuse a LocalFolder instance and add it to children
+                    let child = try Self.localFolder(for: url, parent: self, context: context)
                     self.addToChildren(child)
                 }
                 
