@@ -88,7 +88,7 @@ struct CompactExcalidrawHomeTabBarAccessoryViewModifier: ViewModifier {
                 .tabViewBottomAccessory(isEnabled: isSyncStatePopoverPresented) {
                     SyncStatusContentView()
                 }
-                .onChange(of: syncState.hasActiveSyncOperations, initial: true, throttle: 0.2, latest: true) { newVal in
+                .onChange(of: syncState.hasActiveSyncOperations, initial: true, throttle: 0.2, latest: true) { _, newVal in
                     withAnimation(.smooth) {
                         isSyncStatePopoverPresented = newVal
                     }

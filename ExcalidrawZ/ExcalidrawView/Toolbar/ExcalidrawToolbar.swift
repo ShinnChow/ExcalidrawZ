@@ -32,6 +32,15 @@ struct ExcalidrawToolbar: View {
     @State private var isMathInputSheetPresented = false
     @State private var isMermaidInputSheetPresented = false
     @State private var isPDFPickerPresented = false
+
+    private var activeCoordinator: ExcalidrawCanvasView.Coordinator? {
+        switch fileState.currentActiveFile {
+            case .collaborationFile:
+                fileState.excalidrawCollaborationWebCoordinator ?? toolState.excalidrawWebCoordinator
+            default:
+                fileState.excalidrawWebCoordinator ?? toolState.excalidrawWebCoordinator
+        }
+    }
     
     
     var body: some View {
@@ -510,12 +519,16 @@ struct ExcalidrawToolbar: View {
                 Spacer()
                 
                 if toolState.activatedTool == .cursor {
-                    Button {
-                        Task {
-                            try? await toolState.excalidrawWebCoordinator?.toggleToolbarAction(key: "h")
+                    if let activeCoordinator {
+                        CursorModeTrailingButton(coordinator: activeCoordinator) {
+                            toolState.setActivedTool(.hand)
                         }
-                    } label: {
-                        Text(.localizable(.generalButtonDone))
+                    } else {
+                        Button {
+                            toolState.setActivedTool(.hand)
+                        } label: {
+                            Text(.localizable(.generalButtonDone))
+                        }
                     }
                 } else {
                     Button {
@@ -810,6 +823,48 @@ struct ExcalidrawToolbarItemModifer: ViewModifier {
                     .font(.footnote)
             }
             .padding(1)
+    }
+}
+
+private struct CursorModeTrailingButton: View {
+    @Environment(\.alertToast) private var alertToast
+
+    @ObservedObject var coordinator: ExcalidrawCanvasView.Coordinator
+    var onDone: () -> Void
+
+    private var hasSelection: Bool {
+        !coordinator.selectedElementIDs.isEmpty
+    }
+
+    var body: some View {
+        Button(role: hasSelection ? .destructive : nil) {
+            if hasSelection {
+                deleteSelectedElements()
+            } else {
+                onDone()
+            }
+        } label: {
+            if hasSelection {
+                Label(.localizable(.generalButtonDelete), systemSymbol: .trash)
+                    .labelStyle(.iconOnly)
+                    .foregroundStyle(.red)
+            } else {
+                Text(.localizable(.generalButtonDone))
+            }
+        }
+        .contentTransition(.opacity)
+        .animation(.smooth, value: hasSelection)
+    }
+
+    private func deleteSelectedElements() {
+        Task { @MainActor in
+            do {
+                try await coordinator.toggleDeleteAction()
+                coordinator.clearSelectedElementIDs()
+            } catch {
+                alertToast(error)
+            }
+        }
     }
 }
 

@@ -104793,6 +104793,17 @@
         }
       }
     },
+    "mermaidInputSheetPasteButton": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Paste"
+          }
+        }
+      }
+    },
     "mermaidInputSheetPlaceholder": {
       "extractionState": "manual",
       "localizations": {

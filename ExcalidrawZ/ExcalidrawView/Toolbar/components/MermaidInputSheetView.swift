@@ -23,17 +23,19 @@ struct MermaidInputSheetViewModifier: ViewModifier {
     func body(content: Content) -> some View {
         content
             .sheet(isPresented: $isPresented) {
-                MermaidInputSheetView { definition in
-                    do {
-                        var options = ExcalidrawCore.MermaidInsertOptions()
-                        options.focus = .enabled(true)
-                        guard let coordinator = activeCoordinator else {
-                            throw MermaidInputSheetError.noActiveCanvas
+                NavigationStack {
+                    MermaidInputSheetView { definition in
+                        do {
+                            var options = ExcalidrawCore.MermaidInsertOptions()
+                            options.focus = .enabled(true)
+                            guard let coordinator = activeCoordinator else {
+                                throw MermaidInputSheetError.noActiveCanvas
+                            }
+                            _ = try await coordinator.insertFromMermaid(definition, options: options)
+                        } catch {
+                            alertToast(error)
+                            throw error
                         }
-                        _ = try await coordinator.insertFromMermaid(definition, options: options)
-                    } catch {
-                        alertToast(error)
-                        throw error
                     }
                 }
             }
@@ -67,12 +69,6 @@ struct MermaidInputSheetView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            HStack {
-                Text(.localizable(.toolbarMermaid))
-                    .font(.title.bold())
-                Spacer()
-            }
-
             Picker("", selection: $selectedPage) {
                 Text(.localizable(.mermaidInputSheetInputTab))
                     .tag(MermaidInputSheetPage.input)
@@ -82,7 +78,7 @@ struct MermaidInputSheetView: View {
             .pickerStyle(.segmented)
             .labelsHidden()
 
-            Group {
+            ZStack {
                 switch selectedPage {
                     case .input:
                         inputEditor
@@ -91,15 +87,21 @@ struct MermaidInputSheetView: View {
                 }
             }
             .frame(minHeight: contentHeight)
-
-            HStack {
-                Spacer()
+        }
+        .padding()
+        .navigationTitle(.localizable(.toolbarMermaid))
+        .toolbar {
+            ToolbarItem(placement: .cancellationAction) {
                 Button {
                     previewTask?.cancel()
                     dismiss()
                 } label: {
-                    Text(.localizable(.generalButtonCancel))
+                    Label(.localizable(.generalButtonCancel), systemImage: "xmark")
                 }
+                .labelStyle(.iconOnly)
+            }
+
+            ToolbarItem(placement: .confirmationAction) {
                 Button {
                     insertMermaid()
                 } label: {
@@ -107,15 +109,17 @@ struct MermaidInputSheetView: View {
                         ProgressView()
                             .controlSize(.small)
                     } else {
-                        Text(.localizable(.toolbarLatexMathButtonInsert))
+                        Label(.localizable(.toolbarLatexMathButtonInsert), systemImage: "checkmark")
+                            .labelStyle(.iconOnly)
                     }
                 }
-                .disabled(trimmedInput.isEmpty || isInserting || previewState == .loading)
-                .modernButtonStyle(style: .borderedProminent)
+                .disabled(
+                    trimmedInput.isEmpty ||
+                    isInserting ||
+                    previewState == .loading
+                )
             }
-            .modernButtonStyle(size: .large, shape: .modern)
         }
-        .padding()
         .watch(value: selectedPage) { newValue in
             if newValue == .preview {
                 schedulePreview()
@@ -161,6 +165,18 @@ struct MermaidInputSheetView: View {
                         .padding(.vertical, 18)
                         .allowsHitTesting(false)
                 }
+            }
+            .overlay(alignment: .bottomTrailing) {
+                Button {
+                    pasteFromClipboard()
+                } label: {
+                    Label(.localizable(.mermaidInputSheetPasteButton), systemImage: "clipboard")
+                }
+                .labelStyle(.iconOnly)
+                .buttonStyle(.borderless)
+                .padding(8)
+                .background(.regularMaterial, in: Circle())
+                .padding(10)
             }
     }
 
@@ -257,6 +273,17 @@ struct MermaidInputSheetView: View {
             }
         }
     }
+
+    private func pasteFromClipboard() {
+        #if os(macOS)
+        let text = NSPasteboard.general.string(forType: .string)
+        #else
+        let text = UIPasteboard.general.string
+        #endif
+
+        guard let text, !text.isEmpty else { return }
+        inputText = text
+    }
 }
 
 #Preview {
@@ -277,11 +304,14 @@ private enum MermaidPreviewState: Equatable {
 
 private enum MermaidInputSheetError: LocalizedError {
     case noActiveCanvas
+    case previewUnavailable
 
     var errorDescription: String? {
         switch self {
             case .noActiveCanvas:
                 String(localizable: .mermaidInputSheetNoActiveCanvasError)
+            case .previewUnavailable:
+                String(localizable: .mermaidInputSheetPreviewUnavailable)
         }
     }
 }
@@ -290,12 +320,17 @@ private enum MermaidPreviewRenderer {
     @MainActor
     static func renderPNGData(_ definition: String) async throws -> Data {
         let coordinator = try await AIProposalSandbox.readyCoordinator()
-        let result = try await coordinator.convertMermaidToExcalidraw(definition)
-        let elements = try decodeElements(from: result.elements)
-        let files = try decodeFiles(from: result.files)
+        try await coordinator.replaceAllElements([])
+
+        var options = ExcalidrawCore.MermaidInsertOptions()
+        options.focus = .enabled(false)
+        options.position = .sceneCenter
+        _ = try await coordinator.insertFromMermaid(definition, options: options)
+
+        let file = try await currentFile(from: coordinator)
         return try await coordinator.exportElementsToPNGData(
-            elements: elements,
-            files: files.isEmpty ? nil : files,
+            elements: file.elements,
+            files: file.files.isEmpty ? nil : file.files,
             colorScheme: .light
         )
     }
@@ -311,17 +346,41 @@ private enum MermaidPreviewRenderer {
         #endif
     }
 
-    private static func decodeElements(
-        from values: [ExcalidrawCore.JSONValue]
-    ) throws -> [ExcalidrawElement] {
-        let data = try JSONEncoder().encode(values)
-        return try JSONDecoder().decode([ExcalidrawElement].self, from: data)
+    @MainActor
+    private static func currentFile(
+        from coordinator: ExcalidrawCanvasView.Coordinator
+    ) async throws -> ExcalidrawFile {
+        if let snapshot = try? await coordinator.getCurrentFileSnapshot(),
+           let data = snapshot.dataString.data(using: .utf8) {
+            return try file(fromSceneData: data)
+        }
+
+        guard let result = try await coordinator.saveCurrentFile(),
+              let data = result.dataString.data(using: .utf8) else {
+            throw MermaidInputSheetError.previewUnavailable
+        }
+
+        return try file(fromSceneData: data)
     }
 
-    private static func decodeFiles(
-        from values: [String: ExcalidrawCore.JSONValue]
-    ) throws -> [String: ExcalidrawFile.ResourceFile] {
-        let data = try JSONEncoder().encode(values)
-        return try JSONDecoder().decode([String: ExcalidrawFile.ResourceFile].self, from: data)
+    private static func file(fromSceneData data: Data) throws -> ExcalidrawFile {
+        let baseData = AIProposalSandbox.blankFileData() ?? Data()
+        guard var baseObject = try JSONSerialization.jsonObject(with: baseData) as? [String: Any] else {
+            return try JSONDecoder().decode(ExcalidrawFile.self, from: data)
+        }
+
+        let sceneObject = try JSONSerialization.jsonObject(with: data)
+        if let sceneObject = sceneObject as? [String: Any] {
+            for key in ["elements", "files", "appState"] {
+                if let value = sceneObject[key] {
+                    baseObject[key] = value
+                }
+            }
+        } else if let elements = sceneObject as? [Any] {
+            baseObject["elements"] = elements
+        }
+
+        let mergedData = try JSONSerialization.data(withJSONObject: baseObject)
+        return try JSONDecoder().decode(ExcalidrawFile.self, from: mergedData)
     }
 }
