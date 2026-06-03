@@ -419,12 +419,7 @@ extension FileState {
         source: FileCheckpointSource,
         description: String?
     ) async throws -> UUID {
-        let didStart = url.startAccessingSecurityScopedResource()
-        defer {
-            if didStart { url.stopAccessingSecurityScopedResource() }
-        }
-
-        let data = try Data(contentsOf: url)
+        let data = try await FileSyncCoordinator.shared.openFile(url)
 
         let context = PersistenceController.shared.container.newBackgroundContext()
         return try await context.perform {

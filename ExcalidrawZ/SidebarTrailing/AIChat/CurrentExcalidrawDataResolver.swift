@@ -75,7 +75,7 @@ enum CurrentExcalidrawDataResolver {
                 return try await room.loadContent()
 
             case .localFile(let url), .temporaryFile(let url):
-                return try await FileCoordinator.shared.coordinatedRead(url: url)
+                return try await FileSyncCoordinator.shared.openFile(url)
 
             default:
                 return nil
