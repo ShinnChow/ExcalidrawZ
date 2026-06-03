@@ -260,7 +260,7 @@ extension AIChatView {
                 let model = try await retryModel(conversationID: id)
                 attemptedModel = model
                 let canIncludeActiveFileContext = await activeFileAllowsAIContext()
-                let invocationPlan = await AIChatInvocationPlan.make(
+                let invocationPlan = AIChatInvocationPlan.make(
                     fileState: fileState,
                     preferredInteractionMode: preferredInteractionMode,
                     includesCurrentFileContext: canIncludeActiveFileContext
@@ -330,7 +330,7 @@ extension AIChatView {
                 )
                 attemptedModel = model
                 let canIncludeActiveFileContext = await activeFileAllowsAIContext()
-                let invocationPlan = await AIChatInvocationPlan.make(
+                let invocationPlan = AIChatInvocationPlan.make(
                     fileState: fileState,
                     preferredInteractionMode: preferredInteractionMode,
                     includesCurrentFileContext: canIncludeActiveFileContext

@@ -198,7 +198,7 @@ extension PromptInputView {
                 attemptedModel = model
                 let isNewConversation = self.conversation == nil
                 let canIncludeActiveFileContext = await activeFileAllowsAIContext()
-                let invocationPlan = await AIChatInvocationPlan.make(
+                let invocationPlan = AIChatInvocationPlan.make(
                     fileState: fileState,
                     preferredInteractionMode: preferredInteractionMode,
                     includesCurrentFileContext: canIncludeActiveFileContext

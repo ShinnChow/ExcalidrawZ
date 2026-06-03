@@ -24,22 +24,22 @@ struct FileCheckpointRowView<Checkpoint: FileCheckpointRepresentable>: View {
     
     var body: some View {
         content()
-            .watch(value: checkpoint) { newValue in
-                Task {
-                    do {
-                        let content = try await PersistenceController.shared.checkpointRepository.loadCheckpointContent(
-                            checkpointObjectID: newValue.objectID
-                        )
-                        let file = try? JSONDecoder().decode(ExcalidrawFile.self, from: content)
-                        await MainActor.run {
-                            self.fileSize = content.count
-                            self.file = file
-                        }
-                    } catch {
-                        print(error)
+            .task(id: checkpointMetadataLoadID) {
+                do {
+                    let content = try await loadContent(for: checkpoint)
+                    let file = try? JSONDecoder().decode(ExcalidrawFile.self, from: content)
+                    await MainActor.run {
+                        self.fileSize = content.count
+                        self.file = file
                     }
+                } catch {
+                    print(error)
                 }
             }
+    }
+
+    private var checkpointMetadataLoadID: String {
+        "\(checkpoint.objectID.uriRepresentation().absoluteString)-\(checkpoint.updatedAt?.timeIntervalSinceReferenceDate ?? 0)"
     }
     
     @ViewBuilder
@@ -115,6 +115,18 @@ struct FileCheckpointRowView<Checkpoint: FileCheckpointRepresentable>: View {
         .padding(.horizontal, 8)
         .padding(.vertical, 8)
     }
+
+    @MainActor
+    private func loadContent(for checkpoint: Checkpoint) async throws -> Data {
+        if let fileCheckpoint = checkpoint as? FileCheckpoint {
+            return try await fileCheckpoint.loadContent()
+        }
+
+        guard let content = checkpoint.content else {
+            throw EmptyCheckpointContentError()
+        }
+        return content
+    }
     
     /// Capsule badge for AI-authored result checkpoints. `.aiPre` is
     /// visible in history as the revert anchor, but should read like a
@@ -130,6 +142,8 @@ struct FileCheckpointRowView<Checkpoint: FileCheckpointRepresentable>: View {
         }
     }
 }
+
+private struct EmptyCheckpointContentError: Error {}
 
 
 /// Small capsule used by `FileCheckpointRowView` to surface AI vs user
