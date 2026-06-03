@@ -34,7 +34,10 @@ struct CollaborationHome: View {
     var body: some View {
         ScrollView {
             content()
-                .frame(minHeight: scrollViewHeight)
+                .frame(
+                    maxWidth: .infinity,
+                    minHeight: scrollViewHeight
+                )
                 .background {
                     Color.clear
                         .contentShape(Rectangle())
@@ -127,9 +130,10 @@ struct CollaborationHome: View {
                     CollaborationRoomsList(sortField: .updatedAt, selections: $selections)
                         .padding(.horizontal, 80)
                 }
+                .transition(.opacity.combined(with: .move(edge: .top)))
             }
         }
-        .animation(.default, value: collaborationFiles.isEmpty)
+        .animation(.smooth(duration: 0.24), value: collaborationFiles.count)
     }
     
     @ViewBuilder
