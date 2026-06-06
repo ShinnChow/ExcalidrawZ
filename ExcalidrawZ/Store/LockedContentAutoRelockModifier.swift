@@ -26,6 +26,8 @@ struct LockedContentAutoRelockModifier: ViewModifier {
     @State private var sessionBecomeActiveObserver: NSObjectProtocol?
 #elseif os(iOS)
     @State private var protectedDataObserver: NSObjectProtocol?
+    @State private var appInactivityRelockTask: Task<Void, Never>?
+    @State private var appInactivityRelockGeneration = 0
 #endif
 
     func body(content: Content) -> some View {
@@ -48,18 +50,14 @@ struct LockedContentAutoRelockModifier: ViewModifier {
         switch scenePhase {
             case .active:
                 lockedContentState.noteUserActivity()
-                lockedContentState.activatePendingAutomaticUnlockAfterAppReturn()
+                activatePendingAutomaticUnlockAfterAppReturn()
 
             case .inactive:
                 break
 
             case .background:
 #if os(iOS)
-                Task { @MainActor in
-                    await lockedContentState.relockForAppInactivity(
-                        allowAutomaticUnlockOnNextActive: true
-                    )
-                }
+                relockForAppInactivity()
 #endif
 
             @unknown default:
@@ -130,10 +128,35 @@ struct LockedContentAutoRelockModifier: ViewModifier {
             queue: .main
         ) { _ in
             Task { @MainActor in
-                await lockedContentState.relockForAppInactivity(
-                    allowAutomaticUnlockOnNextActive: true
-                )
+                relockForAppInactivity()
             }
+        }
+#endif
+    }
+
+    private func activatePendingAutomaticUnlockAfterAppReturn() {
+#if os(iOS)
+        let relockTask = appInactivityRelockTask
+        let relockGeneration = appInactivityRelockGeneration
+        Task { @MainActor in
+            await relockTask?.value
+            guard appInactivityRelockGeneration == relockGeneration else { return }
+            appInactivityRelockTask = nil
+            lockedContentState.activatePendingAutomaticUnlockAfterAppReturn()
+        }
+#else
+        lockedContentState.activatePendingAutomaticUnlockAfterAppReturn()
+#endif
+    }
+
+    private func relockForAppInactivity() {
+#if os(iOS)
+        appInactivityRelockGeneration += 1
+        appInactivityRelockTask?.cancel()
+        appInactivityRelockTask = Task { @MainActor in
+            await lockedContentState.relockForAppInactivity(
+                allowAutomaticUnlockOnNextActive: true
+            )
         }
 #endif
     }
@@ -157,6 +180,9 @@ struct LockedContentAutoRelockModifier: ViewModifier {
             NotificationCenter.default.removeObserver(protectedDataObserver)
         }
         protectedDataObserver = nil
+        appInactivityRelockTask?.cancel()
+        appInactivityRelockTask = nil
+        appInactivityRelockGeneration += 1
 #endif
     }
 

@@ -57,12 +57,12 @@ extension PromptInputView {
             toggleAIFileAccess()
         } label: {
             if #available(macOS 14.0, *) {
-                Image(systemName: activeFileAccessAllowsAI ? "eye" : "eye.slash")
+                Image(systemSymbol: activeFileAccessAllowsAI ? .eye : .eyeSlash)
                     .font(.caption)
                     .frame(width: actionBarIconFrameLength, height: actionBarIconFrameLength)
                     .contentTransition(.symbolEffect(.replace))
             } else {
-                Image(systemName: activeFileAccessAllowsAI ? "eye" : "eye.slash")
+                Image(systemSymbol: activeFileAccessAllowsAI ? .eye : .eyeSlash)
                     .font(.caption)
                     .frame(width: actionBarIconFrameLength, height: actionBarIconFrameLength)
             }
@@ -176,27 +176,8 @@ extension PromptInputView {
         // Agent config hasn't loaded → show a quiet placeholder. Loading is fast
         // (one HTTP round-trip on first appearance) so a permanent skeleton would
         // be visual noise; we just render the active model name disabled.
-        let models = AIChatRenderDebug.measure("prompt.modelPicker.models") {
-            (agentConfig?.allowedModels ?? [])
-                .filter { canShowModelInPicker($0) }
-        }
-        let tiers = ExcalidrawModelTier.pickerOrder.filter { tier in
-            models.contains { $0.excalidrawTier == tier }
-        }
-        let activeTier = activeModel.excalidrawTier ?? selectedTierBeforeFallback
         Menu {
-            ForEach(tiers) { tier in
-                Button {
-                    pickTier(tier)
-                } label: {
-                    if tier == activeTier {
-                        Label(tier.name, systemSymbol: .checkmark)
-                    } else {
-                        Text(tier.name)
-                    }
-                }
-                .disabled(!canSelectTier(tier))
-            }
+            modelTierPickerButtons()
         } label: {
             HStack(spacing: 4) {
                 Text(activeModel.excalidrawTierName)
@@ -207,7 +188,40 @@ extension PromptInputView {
             .contentShape(Rectangle())
         }
         .menuIndicator(.hidden)
-        .disabled(tiers.isEmpty)
+        .disabled(modelPickerTiers.isEmpty)
+    }
+
+    @MainActor
+    var modelPickerTiers: [ExcalidrawModelTier] {
+        let models = AIChatRenderDebug.measure("prompt.modelPicker.models") {
+            (agentConfig?.allowedModels ?? [])
+                .filter { canShowModelInPicker($0) }
+        }
+        return ExcalidrawModelTier.pickerOrder.filter { tier in
+            models.contains { $0.excalidrawTier == tier }
+        }
+    }
+
+    @MainActor
+    var activeTierForModelPicker: ExcalidrawModelTier {
+        activeModel.excalidrawTier ?? selectedTierBeforeFallback
+    }
+
+    @MainActor
+    @ViewBuilder
+    func modelTierPickerButtons() -> some View {
+        ForEach(modelPickerTiers) { tier in
+            Button {
+                pickTier(tier)
+            } label: {
+                if tier == activeTierForModelPicker {
+                    Label(tier.name, systemSymbol: .checkmark)
+                } else {
+                    Text(tier.name)
+                }
+            }
+            .disabled(!canSelectTier(tier))
+        }
     }
 
     /// Route a tier pick to the right place: existing conversations get a

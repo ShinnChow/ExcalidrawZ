@@ -83,13 +83,15 @@ struct ExcalidrawEditorToolbarModifier: ViewModifier {
             await lockedContentState.refresh(activeFile: fileState.currentActiveFile)
         }
 #if os(iOS)
-//        .modifier(
-//            HideToolbarModifier(
-//                isPresented: toolState.isBottomBarPresented,
-//                placement: .bottomBar
-//            )
-//        )
+        .modifier(
+            HideToolbarModifier(
+                isPresented: toolState.isBottomBarPresented
+                    && lockedContentState.activeFileLockState != .locked,
+                placement: .bottomBar
+            )
+        )
         .animation(.default, value: toolState.isBottomBarPresented)
+        .animation(.default, value: lockedContentState.activeFileLockState)
         .toolbarBackground(containerHorizontalSizeClass == .regular ? .automatic : .visible, for: .bottomBar)
         .toolbarBackground(
             fileState.currentActiveGroup == .collaboration && fileState.currentActiveFile == nil ? .hidden : .visible,

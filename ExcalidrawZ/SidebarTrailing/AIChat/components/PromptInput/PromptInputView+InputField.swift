@@ -168,6 +168,7 @@ extension PromptInputView {
         return nil
 #endif
     }
+
 }
 
 enum PromptImagePasteResult {
@@ -177,7 +178,7 @@ enum PromptImagePasteResult {
 }
 
 @MainActor
-private struct PromptDraftInputField: View {
+struct PromptDraftInputField: View {
     @EnvironmentObject private var aiChatState: AIChatState
     let draftKey: String
     @ObservedObject var draftState: AIChatPromptDraftState

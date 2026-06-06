@@ -97,6 +97,8 @@ private struct FileStatusObserverModifier: ViewModifier {
                 cloudCheckTask?.cancel()
                 if lockState == .plaintext {
                     startCloudCheckIfNeeded()
+                } else {
+                    isSyncing = false
                 }
             }
     }

@@ -29,7 +29,7 @@ struct ExcalidrawTrailingControls: View {
 
     private var shouldShowInCurrentSizeClass: Bool {
 #if os(iOS)
-        true
+        containerHorizontalSizeClass != .compact
 #else
         containerHorizontalSizeClass != .compact
 #endif
@@ -180,9 +180,9 @@ private struct InspectorTabButton: View {
 
     private var iconFrame: CGFloat {
 #if os(iOS)
-        containerHorizontalSizeClass == .compact ? 28 : 24
+        return containerHorizontalSizeClass == .compact ? 28 : 24
 #else
-        24
+        return 24
 #endif
     }
 

@@ -20,6 +20,7 @@ struct ExcalidrawToolbar: View {
     @EnvironmentObject var fileState: FileState
     @EnvironmentObject var toolState: ToolState
     @EnvironmentObject var layoutState: LayoutState
+    @ObservedObject private var aiChatPreferences = AIChatPreferences.shared
     
 #if canImport(AppKit)
     @State private var window: NSWindow?
@@ -377,46 +378,48 @@ struct ExcalidrawToolbar: View {
     @ViewBuilder
     private func compactContent() -> some View {
         if toolState.inDragMode {
-            HStack(spacing: 20) {
-                Color.clear
-                    .overlay(alignment: .leading) {
-#if os(iOS)
-                        if let activeFile = fileState.currentActiveFile {
-                            FileICloudSyncStatusIndicator(file: activeFile)
-                                .padding(.horizontal, 8)
-                        } else if case .collaborationFile = fileState.currentActiveFile {
-                            CollaborationMembersPopoverButton()
-                        }
-#endif
-                    }
-                Color.clear
-                    .overlay(alignment: .center) {
-#if os(iOS)
-                        FileStatusProvider(file: fileState.currentActiveFile) { status in
-                            Text(
-                                status?.iCloudStatus == .syncing
-                                ? .localizable(.iCloudStatusSyncing)
-                                : .localizable(.toolbarViewMode)
-                            )
-                            .animation(.smooth, value: status?.iCloudStatus == .syncing)
-                        }
-#endif
-                    }
-                    .frame(minWidth: 220) // for iPad
-                Color.clear
-                    .overlay(alignment: .trailing) {
-                        Button {
-                            if case .file(let file) = fileState.currentActiveFile, file.inTrash {
-                                layoutState.isResotreAlertIsPresented.toggle()
-                            } else {
-                                toolState.setActivedTool(.cursor)
-                            }
-                        } label: {
-                            Text(.localizable(.toolbarEdit))
-                        }
-                        .tint(Color.accentColor)
-                    }
+            compactStatusBar
+
+            Spacer(minLength: 0)
+
+            compactInspectorTabButton(
+                tab: .preference,
+                icon: .sliderHorizontal3,
+                title: String(localizable: .canvasPreferencesTitle)
+            )
+            if shouldCollapseCompactInspectorTabs {
+                compactInspectorTabButton(
+                    tab: .aiChat,
+                    icon: .sparkles,
+                    title: "AI Chat",
+                    action: toggleCompactAIChatPresentation
+                )
+                compactInspectorTabsMenu()
+            } else {
+                compactInspectorTabButton(
+                    tab: .search,
+                    icon: .magnifyingglass,
+                    title: String(localizable: .searchButtonTitle)
+                )
+                .keyboardShortcut("f", modifiers: .command)
+                compactInspectorTabButton(
+                    tab: .library,
+                    icon: .book,
+                    title: String(localizable: .librariesTitle)
+                )
+                compactInspectorTabButton(
+                    tab: .history,
+                    icon: .clockArrowCirclepath,
+                    title: String(localizable: .checkpoints)
+                )
+                compactInspectorTabButton(
+                    tab: .aiChat,
+                    icon: .sparkles,
+                    title: "AI Chat",
+                    action: toggleCompactAIChatPresentation
+                )
             }
+            compactEditButton
         } else if let activatedTool = toolState.activatedTool, activatedTool != .cursor {
             if containerHorizontalSizeClass == .compact {
                 Text(activatedTool.localization).frame(maxWidth: .infinity, alignment: .leading).padding(.leading, 6)
@@ -560,6 +563,166 @@ struct ExcalidrawToolbar: View {
                     }
                 }
             }
+        }
+    }
+
+    @ViewBuilder
+    private var compactStatusBar: some View {
+#if os(iOS)
+        if let activeFile = fileState.currentActiveFile {
+            FileICloudSyncStatusIndicator(file: activeFile)
+                .frame(width: 28, height: 28)
+        }
+#endif
+    }
+
+    private var shouldCollapseCompactInspectorTabs: Bool {
+#if os(iOS)
+        guard containerHorizontalSizeClass == .compact else { return false }
+        return UIScreen.main.bounds.width < 390
+#else
+        return false
+#endif
+    }
+
+    @ViewBuilder
+    private var compactEditButton: some View {
+        Button {
+            if case .file(let file) = fileState.currentActiveFile, file.inTrash {
+                layoutState.isResotreAlertIsPresented.toggle()
+            } else {
+                toolState.setActivedTool(.cursor)
+            }
+        } label: {
+            Label(.localizable(.toolbarEdit), systemSymbol: .pencil)
+                .labelStyle(.iconOnly)
+                .frame(width: 28, height: 28)
+        }
+        .modernButtonStyle(style: .glassProminent, size: .small, shape: .circle)
+        .help(String(localizable: .toolbarEdit))
+    }
+
+    @ViewBuilder
+    private func compactInspectorTabButton(
+        tab: LayoutState.InspectorTab,
+        icon: SFSymbol,
+        title: String,
+        action: (() -> Void)? = nil
+    ) -> some View {
+        let isDisabled = compactInspectorTabIsDisabled(tab)
+        let isActive = compactInspectorTabIsActive(tab)
+
+        Button {
+            guard !isDisabled else { return }
+            if let action {
+                action()
+            } else {
+                layoutState.toggleInspector(tab)
+            }
+        } label: {
+            Label(title, systemSymbol: icon)
+                .labelStyle(.iconOnly)
+                .font(.system(size: 16))
+                .foregroundStyle(isActive ? Color.accentColor : Color.primary)
+                .frame(width: 28, height: 28)
+        }
+        .buttonStyle(.plain)
+        .help(title)
+        .opacity(isDisabled && !isActive ? 0.55 : 1)
+        .allowsHitTesting(!isDisabled)
+    }
+
+    @ViewBuilder
+    private func compactInspectorTabsMenu() -> some View {
+        Menu {
+            compactInspectorTabMenuButton(
+                tab: .search,
+                icon: .magnifyingglass,
+                title: String(localizable: .searchButtonTitle)
+            )
+            .keyboardShortcut("f", modifiers: .command)
+            compactInspectorTabMenuButton(
+                tab: .history,
+                icon: .clockArrowCirclepath,
+                title: String(localizable: .checkpoints)
+            )
+            compactInspectorTabMenuButton(
+                tab: .library,
+                icon: .book,
+                title: String(localizable: .librariesTitle)
+            )
+        } label: {
+            Label(.localizable(.generalButtonMore), systemSymbol: .ellipsis)
+                .labelStyle(.iconOnly)
+                .font(.system(size: 16))
+                .foregroundStyle(compactCollapsedInspectorTabsContainActive ? Color.accentColor : Color.primary)
+                .frame(width: 28, height: 28)
+        }
+        .buttonStyle(.plain)
+        .menuIndicator(.hidden)
+        .help(String(localizable: .generalButtonMore))
+#if os(iOS)
+        .menuOrder(.fixed)
+#endif
+    }
+
+    @ViewBuilder
+    private func compactInspectorTabMenuButton(
+        tab: LayoutState.InspectorTab,
+        icon: SFSymbol,
+        title: String
+    ) -> some View {
+        let isDisabled = compactInspectorTabIsDisabled(tab)
+        Button {
+            guard !isDisabled else { return }
+            layoutState.toggleInspector(tab)
+        } label: {
+            Label(title, systemSymbol: icon)
+        }
+        .disabled(isDisabled)
+    }
+
+    private var compactCollapsedInspectorTabsContainActive: Bool {
+        [LayoutState.InspectorTab.search, .history, .library].contains { tab in
+            compactInspectorTabIsActive(tab)
+        }
+    }
+
+    private func compactInspectorTabIsDisabled(_ tab: LayoutState.InspectorTab) -> Bool {
+        switch tab {
+            case .history:
+                return fileState.currentActiveFile == nil
+            default:
+                return false
+        }
+    }
+
+    private func compactInspectorTabIsActive(_ tab: LayoutState.InspectorTab) -> Bool {
+        if tab == .aiChat, layoutState.isAIChatIslandMode {
+            return true
+        }
+        return layoutState.isInspectorPresented && layoutState.activeInspectorTab == tab
+    }
+
+    private var shouldOpenCompactAIChatAsIsland: Bool {
+#if os(iOS)
+        return containerHorizontalSizeClass == .compact &&
+            AIChatAvailability.isAvailable &&
+            aiChatPreferences.isAIEnabled &&
+            !fileState.currentActiveFileIsInTrash
+#else
+        return false
+#endif
+    }
+
+    private func toggleCompactAIChatPresentation() {
+        if layoutState.isAIChatIslandMode {
+            layoutState.isAIChatIslandMode = false
+        } else if shouldOpenCompactAIChatAsIsland {
+            layoutState.isInspectorPresented = false
+            layoutState.enterAIChatIsland()
+        } else {
+            layoutState.toggleInspector(.aiChat)
         }
     }
     

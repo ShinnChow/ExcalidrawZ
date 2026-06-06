@@ -138,6 +138,8 @@ private struct IOSAutoSyncModifier: ViewModifier {
                         default:
                             continue
                     }
+
+                    guard !Task.isCancelled else { break }
                     
                     let currentData = localFileBinding.wrappedValue?.content
                     
@@ -150,6 +152,7 @@ private struct IOSAutoSyncModifier: ViewModifier {
                                 status: .syncing
                             )
                             try? await Task.sleep(nanoseconds: UInt64(1e+9 * 2))
+                            guard !Task.isCancelled else { break }
                             await FileSyncCoordinator.shared.updateFileStatus(
                                 for: url,
                                 status: .downloaded
@@ -162,6 +165,7 @@ private struct IOSAutoSyncModifier: ViewModifier {
                                 )
                             }
                             try? await Task.sleep(nanoseconds: UInt64(1e+9 * 2))
+                            guard !Task.isCancelled else { break }
                             await MainActor.run {
                                 FileStatusService.shared.updateICloudStatus(
                                     fileID: fileID,
@@ -169,6 +173,8 @@ private struct IOSAutoSyncModifier: ViewModifier {
                                 )
                             }
                         }
+
+                        guard !Task.isCancelled else { break }
                         
                         await onUpdate(latestData)
                     }

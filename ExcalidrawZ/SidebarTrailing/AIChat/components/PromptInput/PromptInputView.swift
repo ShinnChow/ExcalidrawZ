@@ -221,6 +221,7 @@ struct PromptInputView<Background: View, Header: View>: View {
     @State var draftHasContent: Bool = false
     @State var draftHasImages: Bool = false
     @State var draftSendRequestToken: Int = 0
+    @State var iOSIslandDraftFieldHeight: CGFloat = 0
 #if DEBUG
     @State var debugContextText: String = ""
     @State var debugContextError: String = ""
@@ -446,17 +447,18 @@ struct PromptInputView<Background: View, Header: View>: View {
         aiChatState.promptDraftState(forKey: promptDraftKey)
     }
 
+    var usesCompactIOSIslandInput: Bool {
+#if os(iOS)
+        style.surface == .compactIOSIsland
+#else
+        false
+#endif
+    }
+
     var body: some View {
         let _ = AIChatRenderDebug.hit("PromptInputView.body")
 
-        ZStack {
-            if #available(macOS 26.0, iOS 26.0, *) {
-                content()
-            } else {
-                content()
-                    .padding(8)
-            }
-        }
+        bodyContent
         .task {
             await loadAgentConfigIfNeeded()
         }
@@ -469,6 +471,31 @@ struct PromptInputView<Background: View, Header: View>: View {
             debugChatContextSheet
         }
 #endif
+    }
+
+    @ViewBuilder
+    private var bodyContent: some View {
+#if os(iOS)
+        if usesCompactIOSIslandInput {
+            iOSIslandInputContent
+        } else {
+            regularBodyContent
+        }
+#else
+        regularBodyContent
+#endif
+    }
+
+    @ViewBuilder
+    private var regularBodyContent: some View {
+        ZStack {
+            if #available(macOS 26.0, iOS 26.0, *) {
+                content()
+            } else {
+                content()
+                    .padding(8)
+            }
+        }
     }
 
     @MainActor

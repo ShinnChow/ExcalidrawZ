@@ -8,6 +8,9 @@
 import SwiftUI
 import Combine
 import CoreData
+#if os(iOS)
+import UIKit
+#endif
 
 import ChocofordUI
 import Logging
@@ -133,6 +136,9 @@ struct ExcalidrawEditor: View {
                     .allowsHitTesting(isInCollaborationSpace && !isLoadingFile)
             }
             .allowsHitTesting(!isLoadingFile)
+#if os(iOS)
+            .dismissKeyboardOnCanvasTap()
+#endif
 
             ExcalidrawTrailingControls()
                 .opacity(isLoadingFile ? 0 : 1)
@@ -542,3 +548,20 @@ struct ExcalidrawEditor: View {
         }
     }
 }
+
+#if os(iOS)
+private extension View {
+    func dismissKeyboardOnCanvasTap() -> some View {
+        simultaneousGesture(
+            TapGesture().onEnded {
+                UIApplication.shared.sendAction(
+                    #selector(UIResponder.resignFirstResponder),
+                    to: nil,
+                    from: nil,
+                    for: nil
+                )
+            }
+        )
+    }
+}
+#endif

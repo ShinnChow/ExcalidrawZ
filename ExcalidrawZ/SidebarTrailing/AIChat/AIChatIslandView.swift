@@ -18,9 +18,9 @@ struct AIChatIslandView: View {
     @Environment(\.containerHorizontalSizeClass) private var containerHorizontalSizeClass
 
     @EnvironmentObject private var layoutState: LayoutState
-    @EnvironmentObject private var fileState: FileState
+    @EnvironmentObject var fileState: FileState
     @EnvironmentObject private var llmState: LLMStateObject
-    @EnvironmentObject private var aiChatState: AIChatState
+    @EnvironmentObject var aiChatState: AIChatState
 
     /// Editor (parent) size, fed in from `ExcalidrawEditor` via a background
     /// `GeometryReader`. Used to clamp the drag offset back inside the editor
@@ -99,7 +99,7 @@ struct AIChatIslandView: View {
         )
     }
 
-    private var islandWidth: CGFloat {
+    var islandWidth: CGFloat {
         layoutConfiguration.width
     }
 
@@ -107,10 +107,18 @@ struct AIChatIslandView: View {
         layoutConfiguration.isDraggable
     }
 
+    private var usesCompactIOSLayout: Bool {
+#if os(iOS)
+        containerHorizontalSizeClass == .compact
+#else
+        false
+#endif
+    }
+
     /// Bridges the `FileState`-owned conversation id to `PromptInputView`'s
     /// `Binding<String?>` API. `PromptInputView` mutates this when it creates
     /// a fresh conversation on first send.
-    private var conversationIDBinding: Binding<String?> {
+    var conversationIDBinding: Binding<String?> {
         Binding(
             get: { fileState.aiChatConversationID },
             set: { fileState.aiChatConversationID = $0 }
@@ -126,13 +134,13 @@ struct AIChatIslandView: View {
     /// Mirror of `ApprovalPromptView`'s gate so the island's
     /// `.animation(value:)` knows to animate the layout shift when
     /// the card flips visibility.
-    private var shouldShowApprovalCard: Bool {
+    var shouldShowApprovalCard: Bool {
         llmState.pendingApprovalRequest != nil
     }
 
     /// Same indicator gate as `AIChatView` — visible while LLMKit's
     /// compact call is in flight on this surface's conversation.
-    private var isCompactingThisConversation: Bool {
+    var isCompactingThisConversation: Bool {
         aiChatState.isCompacting(conversationID: fileState.aiChatConversationID)
     }
 
@@ -399,6 +407,19 @@ struct AIChatIslandView: View {
     
     @ViewBuilder
     private func islandBody() -> some View {
+#if os(iOS)
+        if usesCompactIOSLayout {
+            compactIOSIslandBody()
+        } else {
+            desktopIslandBody()
+        }
+#else
+        desktopIslandBody()
+#endif
+    }
+
+    @ViewBuilder
+    private func desktopIslandBody() -> some View {
         VStack(alignment: .leading, spacing: 10) {
             header
 

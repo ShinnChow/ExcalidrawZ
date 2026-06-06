@@ -181,7 +181,7 @@ extension FileRepository {
 
     func fileContentLockState(fileObjectID: NSManagedObjectID) async throws -> FileContentLockState {
         let snapshot = try await rawFileContentSnapshot(fileObjectID: fileObjectID)
-        let rawContent = try await loadRawFileContent(from: snapshot)
+        let rawContent = try await loadRawFileContentForLockState(from: snapshot)
         guard EncryptedContentService.isEncryptedEnvelope(rawContent) else {
             return .plaintext
         }
@@ -503,6 +503,29 @@ private extension FileRepository {
 
         if let content = snapshot.content {
             return content
+        }
+
+        throw AppError.fileError(.contentNotAvailable(filename: snapshot.name ?? String(localizable: .generalUnknown)))
+    }
+
+    func loadRawFileContentForLockState(from snapshot: RawFileContentSnapshot) async throws -> Data {
+        var localStorageLoadError: Error?
+
+        if let filePath = snapshot.filePath {
+            do {
+                return try await FileStorageManager.shared.loadContent(relativePath: filePath)
+            } catch {
+                localStorageLoadError = error
+                fileRepositoryLockedContentLogger.warning("Failed to inspect local file content protection state: \(error.localizedDescription). Falling back to cached content.")
+            }
+        }
+
+        if let content = snapshot.content {
+            return content
+        }
+
+        if localStorageLoadError != nil {
+            return try await loadRawFileContent(from: snapshot)
         }
 
         throw AppError.fileError(.contentNotAvailable(filename: snapshot.name ?? String(localizable: .generalUnknown)))
