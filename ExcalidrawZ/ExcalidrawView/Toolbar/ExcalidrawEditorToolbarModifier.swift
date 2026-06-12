@@ -19,6 +19,7 @@ struct ExcalidrawEditorToolbarModifier: ViewModifier {
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.managedObjectContext) private var viewContext
     @Environment(\.containerHorizontalSizeClass) private var containerHorizontalSizeClass
+    @Environment(\.containerSize) private var containerSize
     @Environment(\.alertToast) private var alertToast
     
     @EnvironmentObject var appPreference: AppPreference
@@ -37,8 +38,19 @@ struct ExcalidrawEditorToolbarModifier: ViewModifier {
 
     private var shouldFloatNavigationToolbarOverCanvas: Bool {
 #if os(iOS)
-        guard containerHorizontalSizeClass != .compact else { return false }
+        guard !usesCompactIOSBottomToolbar else { return false }
         return UIDevice.current.userInterfaceIdiom == .pad
+#else
+        false
+#endif
+    }
+
+    private var usesCompactIOSBottomToolbar: Bool {
+#if os(iOS)
+        ExcalidrawToolbarLayoutPolicy.usesCompactIOSBottomToolbar(
+            horizontalSizeClass: containerHorizontalSizeClass,
+            containerWidth: containerSize.width
+        )
 #else
         false
 #endif
@@ -51,7 +63,7 @@ struct ExcalidrawEditorToolbarModifier: ViewModifier {
     
     func body(content: Content) -> some View {
         ZStack {
-            if containerHorizontalSizeClass == .compact {
+            if usesCompactIOSBottomToolbar {
                 if #available(iOS 18.0, *) {
                     content
 #if os(iOS)
@@ -112,7 +124,7 @@ struct ExcalidrawEditorToolbarModifier: ViewModifier {
         )
         .animation(.default, value: toolState.isBottomBarPresented)
         .animation(.default, value: lockedContentState.activeFileLockState)
-        .toolbarBackground(containerHorizontalSizeClass == .regular ? .automatic : .visible, for: .bottomBar)
+        .toolbarBackground(usesCompactIOSBottomToolbar ? .visible : .automatic, for: .bottomBar)
         .toolbarBackground(
             shouldHideNavigationToolbarBackground ? .hidden : .visible,
             for: .navigationBar
@@ -133,8 +145,10 @@ struct ExcalidrawEditorToolbarModifier: ViewModifier {
 #if os(iOS)
     @ToolbarContentBuilder
     private func iOSToolbarContent() -> some ToolbarContent {
+        sharedNavigationToolbarContent()
+
         if lockedContentState.activeFileLockState != .locked {
-            if containerHorizontalSizeClass == .compact {
+            if usesCompactIOSBottomToolbar {
                 CompactExcalidrawBottomToolbarContent()
             } else {
                 ToolbarItemGroup(placement: .principal) {
@@ -143,7 +157,6 @@ struct ExcalidrawEditorToolbarModifier: ViewModifier {
             }
         }
 
-        sharedNavigationToolbarContent()
         sharedPrimaryActionToolbarContent()
     }
 #endif
@@ -159,7 +172,7 @@ struct ExcalidrawEditorToolbarModifier: ViewModifier {
 
     @ToolbarContentBuilder
     private func sharedNavigationToolbarContent() -> some ToolbarContent {
-        ToolbarItemGroup(placement: .navigation) {
+        ToolbarItemGroup(placement: .topBarLeading) {
             if #available(macOS 13.0, iOS 16.0, *),
                appPreference.sidebarLayout == .sidebar {
 

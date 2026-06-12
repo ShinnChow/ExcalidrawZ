@@ -19,6 +19,7 @@ struct ExcalidrawEditor: View {
     @Environment(\.managedObjectContext) var viewContext
     @Environment(\.alertToast) var alertToast
     @Environment(\.containerHorizontalSizeClass) private var containerHorizontalSizeClass
+    @Environment(\.containerSize) private var containerSize
 
     @EnvironmentObject var appPreference: AppPreference
     @EnvironmentObject var fileState: FileState
@@ -100,7 +101,10 @@ struct ExcalidrawEditor: View {
 
     private var usesCompactIOSAIChatSurfaces: Bool {
 #if os(iOS)
-        containerHorizontalSizeClass == .compact
+        ExcalidrawToolbarLayoutPolicy.usesCompactIOSBottomToolbar(
+            horizontalSizeClass: containerHorizontalSizeClass,
+            containerWidth: containerSize.width
+        )
 #else
         false
 #endif
@@ -108,7 +112,7 @@ struct ExcalidrawEditor: View {
 
     private var shouldFloatNavigationToolbarOverCanvas: Bool {
 #if os(iOS)
-        guard containerHorizontalSizeClass != .compact else { return false }
+        guard !usesCompactIOSAIChatSurfaces else { return false }
         return UIDevice.current.userInterfaceIdiom == .pad
 #else
         false

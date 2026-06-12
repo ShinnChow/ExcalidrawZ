@@ -10,6 +10,7 @@ import ChocofordUI
 
 struct AIChatIslandOverlay: View {
     @Environment(\.containerHorizontalSizeClass) private var containerHorizontalSizeClass
+    @Environment(\.containerSize) private var containerSize
 
     @EnvironmentObject private var layoutState: LayoutState
     @EnvironmentObject private var fileState: FileState
@@ -19,7 +20,10 @@ struct AIChatIslandOverlay: View {
 
     private var isCompactIOS: Bool {
 #if os(iOS)
-        containerHorizontalSizeClass == .compact
+        ExcalidrawToolbarLayoutPolicy.usesCompactIOSBottomToolbar(
+            horizontalSizeClass: containerHorizontalSizeClass,
+            containerWidth: containerSize.width
+        )
 #else
         false
 #endif

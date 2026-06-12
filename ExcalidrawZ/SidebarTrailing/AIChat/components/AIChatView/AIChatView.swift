@@ -296,8 +296,8 @@ struct AIChatView: View {
 
     @ViewBuilder
     var regularChatBody: some View {
-        ZStack(alignment: .bottom) {
-            chatMessageStage(bottomContentPadding: regularChatInputOverlayHeight)
+        VStack(spacing: 0) {
+            chatMessageStage(bottomContentPadding: 0)
 
             chatInputControls
                 .padding(.bottom, 10)

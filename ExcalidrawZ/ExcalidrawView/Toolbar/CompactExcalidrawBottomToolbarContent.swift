@@ -17,6 +17,7 @@ import UIKit
 
 struct CompactExcalidrawBottomToolbarContent: ToolbarContent {
     @Environment(\.containerHorizontalSizeClass) private var containerHorizontalSizeClass
+    @Environment(\.containerSize) private var containerSize
 
     @EnvironmentObject private var fileState: FileState
     @EnvironmentObject private var toolState: ToolState
@@ -374,10 +375,17 @@ struct CompactExcalidrawBottomToolbarContent: ToolbarContent {
     }
 
     private var canPresentCompactAIChatToolbarInput: Bool {
-        containerHorizontalSizeClass == .compact &&
+        usesCompactIOSBottomToolbar &&
             AIChatAvailability.isAvailable &&
             aiChatPreferences.isAIEnabled &&
             !fileState.currentActiveFileIsInTrash
+    }
+
+    private var usesCompactIOSBottomToolbar: Bool {
+        ExcalidrawToolbarLayoutPolicy.usesCompactIOSBottomToolbar(
+            horizontalSizeClass: containerHorizontalSizeClass,
+            containerWidth: containerSize.width
+        )
     }
 
     private var compactAIChatDraftState: AIChatPromptDraftState {
@@ -562,6 +570,7 @@ private struct CompactAIChatToolbarPlaceholderButton: View {
 
 struct CompactExcalidrawBottomToolbarStateModifier: ViewModifier {
     @Environment(\.containerHorizontalSizeClass) private var containerHorizontalSizeClass
+    @Environment(\.containerSize) private var containerSize
     @Environment(\.alertToast) private var alertToast
 
     @EnvironmentObject private var fileState: FileState
@@ -571,7 +580,7 @@ struct CompactExcalidrawBottomToolbarStateModifier: ViewModifier {
     @ObservedObject private var aiChatPreferences = AIChatPreferences.shared
 
     private var canPresentCompactAIChatToolbarInput: Bool {
-        containerHorizontalSizeClass == .compact &&
+        usesCompactIOSBottomToolbar &&
             lockedContentState.activeFileLockState != .locked &&
             fileState.currentActiveFile != nil &&
             AIChatAvailability.isAvailable &&
@@ -579,10 +588,17 @@ struct CompactExcalidrawBottomToolbarStateModifier: ViewModifier {
             !fileState.currentActiveFileIsInTrash
     }
 
+    private var usesCompactIOSBottomToolbar: Bool {
+        ExcalidrawToolbarLayoutPolicy.usesCompactIOSBottomToolbar(
+            horizontalSizeClass: containerHorizontalSizeClass,
+            containerWidth: containerSize.width
+        )
+    }
+
     func body(content: Content) -> some View {
         content
             .onChange(of: toolState.activatedTool, debounce: 0.05) { newValue in
-                guard containerHorizontalSizeClass == .compact else { return }
+                guard usesCompactIOSBottomToolbar else { return }
                 syncActiveTool(newValue)
             }
             .watch(value: toolState.inDragMode) { inDragMode in

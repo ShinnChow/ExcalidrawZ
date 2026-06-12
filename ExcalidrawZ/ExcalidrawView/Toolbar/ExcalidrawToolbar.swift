@@ -100,11 +100,15 @@ struct ExcalidrawToolbar: View {
             HStack(spacing: 10) {
                 ZStack {
                     Color.clear
-                    segmentedPicker(
-                        sizeClass: sizeClass,
-                        primaryPickerItems: pickerItems.primary,
-                        secondaryPickerItems: pickerItems.secondary
-                    )
+                    if sizeClass == .dense {
+                        denseContent()
+                    } else {
+                        segmentedPicker(
+                            sizeClass: sizeClass,
+                            primaryPickerItems: pickerItems.primary,
+                            secondaryPickerItems: pickerItems.secondary
+                        )
+                    }
                 }
             }
 #if os(iOS)
@@ -113,6 +117,7 @@ struct ExcalidrawToolbar: View {
             
             if #available(macOS 26.0, iOS 26.0, *),
                !pickerItems.secondary.isEmpty,
+               sizeClass != .dense,
                let tool = toolState.activatedTool {
                 secondaryPickerItemsMenu(
                     tool: tool,
@@ -347,6 +352,22 @@ struct ExcalidrawToolbar: View {
             .pickerStyle(.inline)
     }
     
+    @ViewBuilder
+    private func denseContent() -> some View {
+        HStack {
+            Picker(selection: $toolState.activatedTool) {
+                ForEach(ExcalidrawTool.allCases, id: \.self) { tool in
+                    densePickerItems(tool: tool)
+                        .tag(tool)
+                }
+            } label: {
+                Text(.localizable(.toolbarActiveToolTitle))
+            }
+            .pickerStyle(.menu)
+            .fixedSize()
+        }
+    }
+
     @ViewBuilder
     private func secondaryPickerItemsMenuLabel(
         secondaryPickerItems: [ExcalidrawTool],
@@ -870,31 +891,25 @@ private extension View {
 }
 #endif
 
-enum ExcalidrawToolbarToolSizeClass {
-    case dense
-    case compact
-    case regular
-    case expanded
-}
-
 struct ExcalidrawToolbarToolContainer<Content: View>: View {
     @Environment(\.containerSize) private var containerSize
     @EnvironmentObject private var layoutState: LayoutState
     @EnvironmentObject private var fileState: FileState
-    
+
     var content: (_ size: ExcalidrawToolbarToolSizeClass) -> Content
-    
+
     init(
         @ViewBuilder content: @escaping (_ size: ExcalidrawToolbarToolSizeClass) -> Content
     ) {
         self.content = content
     }
-    
+
     @State private var sizeClass: ExcalidrawToolbarToolSizeClass = .dense
-    
+
     var body: some View {
         content(sizeClass)
             .watch(value: containerSize, initial: true) { _, newValue in
+                print("[DEBUG] containerSize", newValue.width)
                 syncSizeClass(width: newValue.width)
             }
             .watch(value: layoutState.isInspectorPresented) { _ in
@@ -907,71 +922,32 @@ struct ExcalidrawToolbarToolContainer<Content: View>: View {
                     syncSizeClass(width: containerSize.width)
                 }
             }
+            .watch(value: fileState.currentActiveFile?.id) { _ in
+                DispatchQueue.main.async {
+                    syncSizeClass(width: containerSize.width)
+                }
+            }
     }
-    
+
     private func syncSizeClass(width: CGFloat) {
         guard width > 0 else { return }
         let newSizeClass = getSizeClass(width)
         guard newSizeClass != sizeClass else { return }
         sizeClass = newSizeClass
     }
-    
+
     private func getSizeClass(_ width: CGFloat) -> ExcalidrawToolbarToolSizeClass {
-        let collaborationExtraWidth: CGFloat = 90 // Collaborators
-        
-        let width: CGFloat = if case .collaborationFile = fileState.currentActiveFile {
-            width - collaborationExtraWidth
-        } else {
-            width
-        }
-        
-        if #available(macOS 13.0, *) {
-            if layoutState.isInspectorPresented,
-               layoutState.isSidebarPresented {
-                switch width {
-                    case ..<1660:
-                        return .dense
-                    case ..<1830:
-                        return .compact
-                    case ..<1980:
-                        return .regular
-                    default:
-                        return .expanded
+        ExcalidrawToolbarLayoutPolicy.toolSizeClass(
+            for: width,
+            isSidebarPresented: layoutState.isSidebarPresented,
+            isInspectorPresented: layoutState.isInspectorPresented,
+            isCollaborationFile: {
+                if case .collaborationFile = fileState.currentActiveFile {
+                    return true
                 }
-            } else if layoutState.isSidebarPresented {
-                switch width {
-                    case ..<1330:
-                        return .dense
-                    case ..<1480:
-                        return .compact
-                    case ..<1680:
-                        return .regular
-                    default:
-                        return .expanded
-                }
-            } else if layoutState.isInspectorPresented {
-                switch width {
-                    case ..<1510:
-                        return .dense
-                    case ..<1680:
-                        return .compact
-                    case ..<1860:
-                        return .regular
-                    default:
-                        return .expanded
-                }
-            }
-        }
-        switch width {
-            case ..<1170:
-                return .dense
-            case ..<1330:
-                return .compact
-            case ..<1510:
-                return .regular
-            default:
-                return .expanded
-        }
+                return false
+            }()
+        )
     }
 }
 

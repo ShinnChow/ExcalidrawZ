@@ -26,6 +26,7 @@ private enum CompactAIChatOverlayMetrics {
 
 struct CompactAIChatInputOverlay: View {
     @Environment(\.containerHorizontalSizeClass) private var containerHorizontalSizeClass
+    @Environment(\.containerSize) private var containerSize
 
     @EnvironmentObject private var fileState: FileState
     @EnvironmentObject private var layoutState: LayoutState
@@ -36,7 +37,10 @@ struct CompactAIChatInputOverlay: View {
     @State private var keyboardAnimationDuration: TimeInterval = 0.25
 
     private var isCompactIOS: Bool {
-        containerHorizontalSizeClass == .compact
+        ExcalidrawToolbarLayoutPolicy.usesCompactIOSBottomToolbar(
+            horizontalSizeClass: containerHorizontalSizeClass,
+            containerWidth: containerSize.width
+        )
     }
 
     private var isVisible: Bool {
@@ -117,6 +121,7 @@ struct CompactAIChatInputOverlay: View {
 
 struct CompactAIChatGeneratingOverlay: View {
     @Environment(\.containerHorizontalSizeClass) private var containerHorizontalSizeClass
+    @Environment(\.containerSize) private var containerSize
 
     @EnvironmentObject private var fileState: FileState
     @EnvironmentObject private var layoutState: LayoutState
@@ -129,7 +134,10 @@ struct CompactAIChatGeneratingOverlay: View {
     @State private var tickerPresentationTask: Task<Void, Never>?
 
     private var isCompactIOS: Bool {
-        containerHorizontalSizeClass == .compact
+        ExcalidrawToolbarLayoutPolicy.usesCompactIOSBottomToolbar(
+            horizontalSizeClass: containerHorizontalSizeClass,
+            containerWidth: containerSize.width
+        )
     }
 
     private var canShowTicker: Bool {
@@ -308,6 +316,7 @@ struct CompactAIChatGeneratingOverlay: View {
 
 struct CompactAIChatDraftAttachmentsOverlay: View {
     @Environment(\.containerHorizontalSizeClass) private var containerHorizontalSizeClass
+    @Environment(\.containerSize) private var containerSize
 
     @EnvironmentObject private var fileState: FileState
     @EnvironmentObject private var layoutState: LayoutState
@@ -315,7 +324,10 @@ struct CompactAIChatDraftAttachmentsOverlay: View {
     @ObservedObject private var aiChatPreferences = AIChatPreferences.shared
 
     private var isCompactIOS: Bool {
-        containerHorizontalSizeClass == .compact
+        ExcalidrawToolbarLayoutPolicy.usesCompactIOSBottomToolbar(
+            horizontalSizeClass: containerHorizontalSizeClass,
+            containerWidth: containerSize.width
+        )
     }
 
     private var canShowDraftAttachments: Bool {
@@ -357,6 +369,7 @@ struct CompactAIChatDraftAttachmentsOverlay: View {
 
 struct CompactAIChatProposalOverlay: View {
     @Environment(\.containerHorizontalSizeClass) private var containerHorizontalSizeClass
+    @Environment(\.containerSize) private var containerSize
 
     @EnvironmentObject private var fileState: FileState
     @EnvironmentObject private var layoutState: LayoutState
@@ -364,7 +377,10 @@ struct CompactAIChatProposalOverlay: View {
     @ObservedObject private var aiChatPreferences = AIChatPreferences.shared
 
     private var isCompactIOS: Bool {
-        containerHorizontalSizeClass == .compact
+        ExcalidrawToolbarLayoutPolicy.usesCompactIOSBottomToolbar(
+            horizontalSizeClass: containerHorizontalSizeClass,
+            containerWidth: containerSize.width
+        )
     }
 
     private var canShowProposalSurface: Bool {
