@@ -69,9 +69,10 @@ struct CompactExcalidrawBottomToolbarContent: ToolbarContent {
 
     @ViewBuilder
     private func activeToolControls(_ activatedTool: ExcalidrawTool) -> some View {
+        activeToolLockButton(for: activatedTool)
         Text(activatedTool.localization)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.leading, 6)
+            .padding(.leading, 2)
         Button {
             if activatedTool == .arrow {
                 Task {
@@ -83,6 +84,27 @@ struct CompactExcalidrawBottomToolbarContent: ToolbarContent {
             Label(.localizable(.generalButtonCancel), systemSymbol: .checkmark)
         }
         .modernButtonStyle(style: .glassProminent, shape: .circle)
+    }
+
+    @ViewBuilder
+    private func activeToolLockButton(for activatedTool: ExcalidrawTool) -> some View {
+        Button {
+            toolState.toggleToolLock()
+        } label: {
+            if #available(iOS 17.0, *) {
+                Image(systemSymbol: toolState.isToolLocked ? .lock : .lockOpen)
+                    .frame(width: 16, height: 16)
+                    .contentTransition(.symbolEffect(.replace))
+            } else {
+                Image(systemSymbol: toolState.isToolLocked ? .lock : .lockOpen)
+                    .frame(width: 16, height: 16)
+            }
+        }
+        .foregroundStyle(toolState.isToolLocked ? Color.accentColor : Color.primary)
+        .modernButtonStyle(style: .glass, shape: .circle)
+        .help("\(String(localizable: .toolbarButtonLockToolHelp)) - Q")
+        .accessibilityLabel(Text(localizable: .toolbarButtonLockToolLabel))
+        .animation(.default, value: toolState.isToolLocked)
     }
 
     @ViewBuilder

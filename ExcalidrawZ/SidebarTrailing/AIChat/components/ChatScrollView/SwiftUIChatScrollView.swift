@@ -120,6 +120,7 @@ private struct ChatScrollContainer<Content: View>: View {
                 }
                 .padding(.horizontal, 10)
             }
+            .chatScrollClipDisabled()
             .chatScrollDismissesKeyboardInteractively()
             .watch(value: scrollToBottomRequest.token) {
                 scrollToBottom(proxy, animated: scrollToBottomRequest.animated)
@@ -187,6 +188,15 @@ private struct ChatScrollContainer<Content: View>: View {
 }
 
 private extension View {
+    @ViewBuilder
+    func chatScrollClipDisabled() -> some View {
+        if #available(iOS 17.0, macOS 14.0, *) {
+            self.scrollClipDisabled()
+        } else {
+            self
+        }
+    }
+
     @ViewBuilder
     func chatScrollDismissesKeyboardInteractively() -> some View {
 #if os(iOS)

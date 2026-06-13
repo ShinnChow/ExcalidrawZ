@@ -259,7 +259,12 @@ struct WhatsNewView: View {
 #endif
         .background {
             VStack {
-                Color.clear.frame(height: containerHorizontalSizeClass == .compact ? 80 : 20)
+#if os(macOS)
+                Color.clear.frame(height: 20)
+
+#else
+                Color.clear.frame(height: containerHorizontalSizeClass == .compact ? 80 : 40)
+#endif
                 // V2 special
                 Image("AI Cover")
                     .resizable()

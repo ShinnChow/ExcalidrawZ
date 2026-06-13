@@ -11,37 +11,34 @@ extension AIChatView {
     @MainActor @ToolbarContentBuilder
     func toolbar() -> some ToolbarContent {
         if layoutState.isInspectorPresented {
+#if os(macOS)
             ToolbarItemGroup(placement: .destructiveAction) {
-                Button {
-#if os(iOS)
-                    if containerHorizontalSizeClass == .compact {
-                        layoutState.enterCompactAIChatInputEditing()
-                    } else {
-                        layoutState.enterAIChatIsland()
-                    }
-#else
-                    layoutState.enterAIChatIsland()
-#endif
-                } label: {
-                    Label(.localizable(.aiChatButtonIslandMode), systemSymbol: .menubarDockRectangle)
-                }
-                .disabled(fileState.currentActiveFileIsInTrash || !isAIAvailable || !prefs.isAIEnabled)
-                .help(String(localizable: .aiChatButtonIslandModeHelp))
+                islandModeButton
             }
-            
+#else
+            ToolbarItemGroup(placement: .topBarLeading) {
+                islandModeButton
+            }
+#endif
+
+#if os(iOS)
+            if containerHorizontalSizeClass != .compact {
+                InspectorHeaderToolbar(
+                    title: String(localizable: .aiChatTitle),
+                    isInspectorPresented: layoutState.isInspectorPresented
+                )
+            }
+#else
             // This work...
             ToolbarItemGroup(placement: .principal) {
                 Spacer()
             }
-            
-#if os(macOS)
+
             if #available(macOS 26.0, *) {
                 // Not working...
                 ToolbarSpacer(.fixed)
             }
-#endif
-            
-#if os(macOS)
+
             InspectorHeaderToolbar(
                 title: String(localizable: .aiChatTitle),
                 isInspectorPresented: layoutState.isInspectorPresented
@@ -114,6 +111,25 @@ extension AIChatView {
             Label(.localizable(.generalButtonMore), systemSymbol: .ellipsis)
         }
         .menuIndicator(.hidden)
+    }
+
+    @ViewBuilder
+    private var islandModeButton: some View {
+        Button {
+#if os(iOS)
+            if containerHorizontalSizeClass == .compact {
+                layoutState.enterCompactAIChatInputEditing()
+            } else {
+                layoutState.enterAIChatIsland()
+            }
+#else
+            layoutState.enterAIChatIsland()
+#endif
+        } label: {
+            Label(.localizable(.aiChatButtonIslandMode), systemSymbol: .menubarDockRectangle)
+        }
+        .disabled(fileState.currentActiveFileIsInTrash || !isAIAvailable || !prefs.isAIEnabled)
+        .help(String(localizable: .aiChatButtonIslandModeHelp))
     }
 
     private func presentAISettings() {

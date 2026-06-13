@@ -79,7 +79,7 @@ struct ExcalidrawToolbar: View {
             compactContent()
         } else {
 #if os(iOS)
-            HStack(spacing: 20) {
+            HStack(spacing: 10) {
                 adaptiveToolPickerContent()
             }
 #else

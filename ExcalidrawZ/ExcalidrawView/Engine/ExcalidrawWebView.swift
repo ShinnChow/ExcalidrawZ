@@ -76,21 +76,36 @@ class ExcalidrawWebView: WKWebView {
 #if os(iOS)
 private final class ExcalidrawIndirectScrollForwarder: NSObject, UIGestureRecognizerDelegate {
     private weak var webView: WKWebView?
+    private weak var scrollRecognizer: UIPanGestureRecognizer?
+    private weak var pinchRecognizer: UIPinchGestureRecognizer?
+    private let pinchWheelDeltaMultiplier: CGFloat = 54
 
     init(webView: WKWebView) {
         self.webView = webView
         super.init()
 
-        let recognizer = UIPanGestureRecognizer(
+        let scrollRecognizer = UIPanGestureRecognizer(
             target: self,
             action: #selector(handleIndirectScroll(_:))
         )
-        recognizer.allowedScrollTypesMask = .all
-        recognizer.cancelsTouchesInView = false
-        recognizer.delaysTouchesBegan = false
-        recognizer.delaysTouchesEnded = false
-        recognizer.delegate = self
-        webView.addGestureRecognizer(recognizer)
+        scrollRecognizer.allowedScrollTypesMask = .all
+        scrollRecognizer.cancelsTouchesInView = false
+        scrollRecognizer.delaysTouchesBegan = false
+        scrollRecognizer.delaysTouchesEnded = false
+        scrollRecognizer.delegate = self
+        webView.addGestureRecognizer(scrollRecognizer)
+        self.scrollRecognizer = scrollRecognizer
+
+        let pinchRecognizer = UIPinchGestureRecognizer(
+            target: self,
+            action: #selector(handleIndirectPinch(_:))
+        )
+        pinchRecognizer.cancelsTouchesInView = false
+        pinchRecognizer.delaysTouchesBegan = false
+        pinchRecognizer.delaysTouchesEnded = false
+        pinchRecognizer.delegate = self
+        webView.addGestureRecognizer(pinchRecognizer)
+        self.pinchRecognizer = pinchRecognizer
     }
 
     @objc private func handleIndirectScroll(_ recognizer: UIPanGestureRecognizer) {
@@ -115,6 +130,30 @@ private final class ExcalidrawIndirectScrollForwarder: NSObject, UIGestureRecogn
         )
     }
 
+    @objc private func handleIndirectPinch(_ recognizer: UIPinchGestureRecognizer) {
+        guard recognizer.state == .began || recognizer.state == .changed,
+              let webView else {
+            recognizer.scale = 1
+            return
+        }
+
+        let scale = recognizer.scale
+        recognizer.scale = 1
+
+        guard scale > 0, scale.isFinite else { return }
+
+        let deltaY = -log(scale) * pinchWheelDeltaMultiplier
+        guard abs(deltaY) > 0.01 else { return }
+
+        dispatchWheelEvent(
+            deltaX: 0,
+            deltaY: deltaY,
+            location: recognizer.location(in: webView),
+            in: webView,
+            ctrlKey: true
+        )
+    }
+
     func gestureRecognizer(
         _ gestureRecognizer: UIGestureRecognizer,
         shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer
@@ -126,7 +165,15 @@ private final class ExcalidrawIndirectScrollForwarder: NSObject, UIGestureRecogn
         _ gestureRecognizer: UIGestureRecognizer,
         shouldReceive event: UIEvent
     ) -> Bool {
-        event.type == .scroll
+        if gestureRecognizer === scrollRecognizer {
+            return event.type == .scroll
+        }
+
+        if gestureRecognizer === pinchRecognizer {
+            return event.type == .transform
+        }
+
+        return false
     }
 
     func gestureRecognizer(
@@ -147,7 +194,8 @@ private final class ExcalidrawIndirectScrollForwarder: NSObject, UIGestureRecogn
         deltaX: CGFloat,
         deltaY: CGFloat,
         location: CGPoint,
-        in webView: WKWebView
+        in webView: WKWebView,
+        ctrlKey: Bool = false
     ) {
         let script = """
         (() => {
@@ -172,7 +220,8 @@ private final class ExcalidrawIndirectScrollForwarder: NSObject, UIGestureRecogn
                 deltaX: \(Self.javascriptNumber(deltaX)),
                 deltaY: \(Self.javascriptNumber(deltaY)),
                 deltaZ: 0,
-                deltaMode: 0
+                deltaMode: 0,
+                ctrlKey: \(ctrlKey ? "true" : "false")
             });
 
             return target.dispatchEvent(event);

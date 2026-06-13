@@ -226,17 +226,31 @@ struct InspectorPresentationModifier: ViewModifier {
                                 }
                         }
                     }
-                    .clipShape(RoundedRectangle(cornerRadius: 12))
+                    .clipShape(
+                        RoundedRectangle(
+                            cornerRadius: floatingInspectorCornerRadius,
+                            style: .continuous
+                        )
+                    )
                     .background {
                         if #available(iOS 26.0, macOS 26.0, *) {
-                            RoundedRectangle(cornerRadius: 24)
+                            RoundedRectangle(
+                                cornerRadius: floatingInspectorCornerRadius,
+                                style: .continuous
+                            )
                                 .fill(.background)
-                                .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 24))
+                                .glassEffect(
+                                    .regular,
+                                    in: RoundedRectangle(
+                                        cornerRadius: floatingInspectorCornerRadius,
+                                        style: .continuous
+                                    )
+                                )
 #if os(macOS)
                                 .shadow(radius: 4)
 #endif
                         } else {
-                            RoundedRectangle(cornerRadius: 12)
+                            RoundedRectangle(cornerRadius: 12, style: .continuous)
                                 .fill(.regularMaterial)
                                 .shadow(radius: 4)
                         }
@@ -265,16 +279,18 @@ struct InspectorPresentationModifier: ViewModifier {
         .animation(.easeOut, value: shouldShowInspectorPresentation)
     }
 
+    private var floatingInspectorCornerRadius: CGFloat {
+        if #available(iOS 26.0, macOS 26.0, *) {
+            24
+        } else {
+            12
+        }
+    }
+
     @ViewBuilder
     private func floatingInspectorPanelContent() -> some View {
-        if layoutState.activeInspectorTab == .aiChat {
-            ZStack(alignment: .top) {
-                inspectorContent()
-                    .disabled(shouldDisableInspectorContent)
-
-                floatingInspectorTitle()
-                    .allowsHitTesting(false)
-            }
+        if shouldUseFloatingNavigationInspectorContent {
+            floatingNavigationInspectorContent()
         } else if floatingInspectorContentHasOwnTitle {
             inspectorContent()
                 .disabled(shouldDisableInspectorContent)
@@ -288,9 +304,30 @@ struct InspectorPresentationModifier: ViewModifier {
         }
     }
 
+    private var shouldUseFloatingNavigationInspectorContent: Bool {
+        switch layoutState.activeInspectorTab {
+            case .aiChat, .library:
+                true
+            case .history:
+                !isCompactIOS
+            default:
+                false
+        }
+    }
+
+    @ViewBuilder
+    private func floatingNavigationInspectorContent() -> some View {
+        NavigationStack {
+            inspectorContent()
+                .disabled(shouldDisableInspectorContent)
+                .navigationTitle(inspectorTitle)
+                .navigationBarTitleDisplayMode(.inline)
+        }
+    }
+
     private var floatingInspectorContentHasOwnTitle: Bool {
 #if os(iOS)
-        layoutState.activeInspectorTab == .history
+        layoutState.activeInspectorTab == .history && isCompactIOS
 #else
         false
 #endif
@@ -301,16 +338,7 @@ struct InspectorPresentationModifier: ViewModifier {
 #if os(iOS)
         if #available(iOS 26.0, *),
            layoutState.activeInspectorTab == .aiChat {
-            Text(inspectorTitle)
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(.secondary)
-                .padding(.horizontal, 14)
-                .padding(.vertical, 6)
-                .background {
-                    Capsule()
-                        .fill(.clear)
-                        .glassEffect(.regular, in: Capsule())
-                }
+            InspectorToolbarTitleLabel(title: inspectorTitle)
                 .frame(maxWidth: .infinity)
                 .padding(.top, 8)
                 .padding(.bottom, 7)
@@ -330,6 +358,16 @@ struct InspectorPresentationModifier: ViewModifier {
             .frame(maxWidth: .infinity)
             .padding(.vertical, 10)
             .padding(.horizontal, 4)
+    }
+}
+
+struct InspectorToolbarTitleLabel: View {
+    let title: String
+
+    var body: some View {
+        Text(title)
+            .foregroundStyle(.secondary)
+            .font(.headline)
     }
 }
 
@@ -406,7 +444,6 @@ private struct CompactInspectorNavigationSheet<Content: View>: View {
     }
 }
 
-#if os(macOS)
 /// Renders the title that appears at the top of the inspector chrome in sidebar mode.
 /// The placement gymnastics are needed to push the toggle to the right and center the title across macOS versions.
 struct InspectorHeaderToolbar: ToolbarContent {
@@ -415,6 +452,13 @@ struct InspectorHeaderToolbar: ToolbarContent {
     let isInspectorPresented: Bool
     
     var body: some ToolbarContent {
+#if os(iOS)
+        ToolbarItem(placement: .principal) {
+            if isInspectorPresented {
+                InspectorToolbarTitleLabel(title: title)
+            }
+        }
+#else
         /// This is the key to make sidebar toggle at the right side.
         /// The `status` is work well in macOS 15.0+. But not well in macOS 14.0
         ToolbarItemGroup(placement:  .status) {
@@ -422,10 +466,7 @@ struct InspectorHeaderToolbar: ToolbarContent {
                 if #available(macOS 15.0, iOS 18.0, *) {} else {
                     Spacer()
                 }
-                Text(title)
-                    .foregroundStyle(.secondary)
-                    .font(.headline)
-                    .padding(.horizontal, 8)
+                InspectorToolbarTitleLabel(title: title)
                 if #available(macOS 15.0, iOS 18.0, *) {} else {
                     Spacer()
                 }
@@ -436,7 +477,7 @@ struct InspectorHeaderToolbar: ToolbarContent {
                 }
             }
         }
+#endif
         
     }
 }
-#endif

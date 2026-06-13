@@ -321,24 +321,24 @@ struct ExportImageView: View {
     
     @ViewBuilder
     private func exportImageSettingItems() -> some View {
-        if containerHorizontalSizeClass == .compact {
-            exportColorSchemeSettingRow
-            exportWithBackgroundSettingRow
-            exportEditableSettingRow
-            exportScaleSettingRow
-        } else {
-            VStack(alignment: .leading, spacing: 12) {
-                HStack {
-                    exportColorSchemePicker
+#if os(iOS)
+        exportColorSchemeSettingRow
+        exportWithBackgroundSettingRow
+        exportEditableSettingRow
+        exportScaleSettingRow
+#else
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                exportColorSchemePicker
 
-                    exportWithBackgroundToggle
+                exportWithBackgroundToggle
 
-                    exportEditableToggle
-                }
-
-                exportScaleSettingRow
+                exportEditableToggle
             }
+
+            exportScaleSettingRow
         }
+#endif
     }
 
     @ViewBuilder

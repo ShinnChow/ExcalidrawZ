@@ -512,20 +512,7 @@ private struct PromptDraftTextArea: View {
 
 private extension TextArea {
     func promptInputSubmitOnReturn(_ submit: @escaping () -> Void) -> TextArea {
-#if os(macOS)
-        self.keyDownHandler(
-            TextFieldKeyDownEventHandler(triggers: [(36, nil)]) { event in
-                guard let event else { return nil }
-                if event.keyCode == 36, !event.modifierFlags.contains(.shift) {
-                    submit()
-                    return nil
-                }
-                return event
-            }
-        )
-#else
-        self
-#endif
+        self.submitOnReturn(submit)
     }
 }
 

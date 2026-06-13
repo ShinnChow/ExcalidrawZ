@@ -273,74 +273,33 @@ extension PromptInputView {
 
     @ViewBuilder
     var iOSIslandAttachmentMenu: some View {
-        ZStack {
-            Menu {
-                Button {
-                    beginIOSAttachmentPickerPresentation()
-                    isImagePickerPresented = true
-                } label: {
-                    Label(.localizable(.exportSheetButtonFile), systemSymbol: .doc)
-                }
-                .disabled(!canInsertImages)
-
-                Button {
-                    presentIOSPhotoLibraryPicker()
-                } label: {
-                    Label(.localizable(.aiChatInputAttachmentMenuItemPhotoLibrary), systemSymbol: .photoOnRectangle)
-                }
-                .disabled(!canInsertImages)
-
-                Button {
-                    beginIOSAttachmentPickerPresentation()
-                    isIOSCameraPickerPresented = true
-                } label: {
-                    Label(.localizable(.aiChatInputAttachmentMenuItemCamera), systemSymbol: .camera)
-                }
-                .disabled(
-                    !canInsertImages ||
-                        !UIImagePickerController.isSourceTypeAvailable(.camera)
-                )
-            } label: {
-                iOSIslandCircleLabel {
-                    Image(systemSymbol: .plus)
-                        .font(.system(size: 16, weight: .semibold))
-                }
+        AIChatAttachmentMenu(
+            canInsertImages: canInsertImages,
+            isFileImporterPresented: $isImagePickerPresented,
+            selectedPhotoPickerItems: $iOSSelectedPhotoPickerItems,
+            isPhotoLibraryPickerPresented: $isIOSPhotoLibraryPickerPresented,
+            isCameraPickerPresented: $isIOSCameraPickerPresented,
+            onBeginPickerPresentation: {
+                beginIOSAttachmentPickerPresentation()
+            },
+            onFilePickerDismiss: {
+                finishIOSAttachmentPickerPresentation()
+            },
+            onPhotoPickerDismiss: {
+                finishIOSAttachmentPickerPresentation()
+            },
+            onCameraPickerDismiss: {
+                finishIOSAttachmentPickerPresentation()
+            },
+            onImagesPicked: appendAttachmentImages,
+            onImageInputUnavailable: showImageInputUnavailableToast
+        ) {
+            iOSIslandCircleLabel {
+                Image(systemSymbol: .plus)
+                    .font(.system(size: 16, weight: .semibold))
             }
-            .labelStyle(.iconOnly)
-            .menuIndicator(.hidden)
-            .buttonStyle(.plain)
-
-            Color.clear
-                .frame(width: 0, height: 0)
-                .photosPicker(
-                    isPresented: $isIOSPhotoLibraryPickerPresented,
-                    selection: $iOSSelectedPhotoPickerItems,
-                    matching: .images
-                )
         }
-        .fileImporter(
-            isPresented: $isImagePickerPresented,
-            allowedContentTypes: [.image],
-            allowsMultipleSelection: true
-        ) { result in
-            finishIOSAttachmentPickerPresentation()
-            handleImagePickerResult(result)
-        }
-        .sheet(isPresented: $isIOSCameraPickerPresented, onDismiss: {
-            finishIOSAttachmentPickerPresentation()
-        }) {
-            AIChatCameraImagePicker { image in
-                handleIOSCameraImage(image)
-            }
-            .ignoresSafeArea()
-        }
-        .watch(value: isIOSPhotoLibraryPickerPresented) { _, isPresented in
-            guard !isPresented else { return }
-            finishIOSAttachmentPickerPresentation()
-        }
-        .watch(value: iOSSelectedPhotoPickerItems.map(\.itemIdentifier)) { _ in
-            handleIOSPhotoPickerItems(iOSSelectedPhotoPickerItems)
-        }
+        .buttonStyle(.plain)
     }
 
     @ViewBuilder
@@ -569,19 +528,6 @@ extension PromptInputView {
     }
 
     @MainActor
-    private func presentIOSPhotoLibraryPicker() {
-        beginIOSAttachmentPickerPresentation()
-        Task { @MainActor in
-            try? await Task.sleep(for: .milliseconds(120))
-            guard canInsertImages else {
-                finishIOSAttachmentPickerPresentation(refocus: false)
-                return
-            }
-            isIOSPhotoLibraryPickerPresented = true
-        }
-    }
-
-    @MainActor
     private func beginIOSAttachmentPickerPresentation() {
         layoutState.isCompactAIChatAttachmentPickerPresented = true
         isInputFocused = true
@@ -595,41 +541,6 @@ extension PromptInputView {
         refocusIOSIslandInput()
     }
 
-    @MainActor
-    private func handleIOSPhotoPickerItems(_ items: [PhotosPickerItem]) {
-        guard !items.isEmpty else { return }
-        guard canInsertImages, upgradeModelForImageInputIfNeeded() else {
-            iOSSelectedPhotoPickerItems = []
-            alertToast(AIChatInputCapabilityError.noModelCanReadImages)
-            return
-        }
-
-        Task {
-            let images = await AIChatAttachmentImageImporter.pendingImages(from: items)
-            await MainActor.run {
-                aiChatState.requestAppendDraftImages(images, draftKey: promptDraftKey)
-                iOSSelectedPhotoPickerItems = []
-            }
-        }
-    }
-
-    @MainActor
-    private func handleIOSCameraImage(_ image: UIImage?) {
-        guard let image else { return }
-        appendIOSAttachmentImages([
-            AIChatAttachmentImageImporter.pendingImage(from: image)
-        ])
-    }
-
-    @MainActor
-    private func appendIOSAttachmentImages(_ images: [PendingPastedImage]) {
-        guard !images.isEmpty else { return }
-        guard canInsertImages, upgradeModelForImageInputIfNeeded() else {
-            alertToast(AIChatInputCapabilityError.noModelCanReadImages)
-            return
-        }
-        aiChatState.requestAppendDraftImages(images, draftKey: promptDraftKey)
-    }
 }
 
 private struct IOSIslandDraftHeightReader: ViewModifier {

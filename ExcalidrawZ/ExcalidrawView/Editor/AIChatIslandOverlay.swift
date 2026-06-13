@@ -46,8 +46,11 @@ struct AIChatIslandOverlay: View {
     }
 
     private var regularOverlay: some View {
-        AIChatIslandView(canvasSize: canvasSize)
-            .padding(.bottom, 24)
-            .transition(.scale.combined(with: .opacity))
+        ZStack(alignment: .bottom) {
+            AIChatIslandView(canvasSize: canvasSize)
+                .padding(.bottom, 24)
+                .transition(.scale.combined(with: .opacity))
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
     }
 }

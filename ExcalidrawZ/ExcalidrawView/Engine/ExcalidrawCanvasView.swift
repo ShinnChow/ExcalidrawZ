@@ -22,6 +22,7 @@ struct ExcalidrawCanvasView: View {
     @EnvironmentObject var exportState: ExportState
     @EnvironmentObject var toolState: ToolState
     @EnvironmentObject var canvasPreferencesState: CanvasPreferencesState
+    @Environment(\.excalidrawNativeViewportInsets) private var nativeViewportInsets
 #if os(iOS)
     @Environment(\.containerHorizontalSizeClass) private var containerHorizontalSizeClass
 #endif
@@ -144,9 +145,13 @@ struct ExcalidrawCanvasView: View {
             .watch(value: appPreference.excalidrawAppearance) { _ in
                 applyColorMode()
             }
+            .watch(value: nativeViewportInsets, initial: true) { _, _ in
+                applyNativeViewportInsets()
+            }
             .watch(value: loadingState) { state in
                 if state == .loaded {
                     applyAllSettings()
+                    applyNativeViewportInsets()
                     if let file {
                         handleFileChange(file)
                     }
@@ -324,6 +329,13 @@ struct ExcalidrawCanvasView: View {
     private func applyAllSettings() {
         applyFonts()
         applyColorMode()
+    }
+
+    private func applyNativeViewportInsets() {
+        let insets = nativeViewportInsets
+        Task {
+            try? await excalidrawCore.setNativeViewportInsets(insets)
+        }
     }
 
     private func applyLoadedFilePresentationSettings() async {

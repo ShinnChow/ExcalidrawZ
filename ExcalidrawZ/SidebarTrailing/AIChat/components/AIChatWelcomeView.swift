@@ -12,8 +12,6 @@ import SwiftUI
 import SFSafeSymbols
 
 struct AIChatWelcomeView: View {
-    @Environment(\.containerHorizontalSizeClass) private var containerHorizontalSizeClass
-
     private let animationRate: Double = 1.5
     
     /// Caller dismisses by flipping its own state — we just notify.
@@ -72,8 +70,8 @@ struct AIChatWelcomeView: View {
         .allowsHitTesting(!isDismissing)
         .background {
             animatedBackground
+                .ignoresSafeArea()
         }
-        .clipShape(RoundedRectangle(cornerRadius: welcomeCornerRadius, style: .continuous))
         .task {
             guard !hasAnimatedIn else { return }
             hasAnimatedIn = true
@@ -109,14 +107,6 @@ struct AIChatWelcomeView: View {
                 }
             }
         }
-    }
-
-    private var welcomeCornerRadius: CGFloat {
-#if os(iOS)
-        containerHorizontalSizeClass == .compact ? 0 : 24
-#else
-        24
-#endif
     }
     
     // MARK: - Background

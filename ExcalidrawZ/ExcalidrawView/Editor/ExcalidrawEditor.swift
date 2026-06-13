@@ -42,6 +42,7 @@ struct ExcalidrawEditor: View {
     @State private var loadingTask: Task<Void, Never>?
     @State private var fileLoadRevealTask: Task<Void, Never>?
     @State private var documentLoadCompletion: ExcalidrawDocumentLoadCompletion?
+    @State private var measuredNativeViewportInsets: ExcalidrawNativeViewportInsets = .zero
 
     @State private var conflictFileURL: URL?
     @State private var isSyncing = false
@@ -122,6 +123,10 @@ struct ExcalidrawEditor: View {
     private var canvasIgnoredSafeAreaEdges: Edge.Set {
         shouldFloatNavigationToolbarOverCanvas ? .top : []
     }
+
+    private var nativeViewportInsetsForWeb: ExcalidrawNativeViewportInsets {
+        shouldFloatNavigationToolbarOverCanvas ? measuredNativeViewportInsets : .zero
+    }
     
     
     @State private var canvasLoadingState: ExcalidrawCanvasView.LoadingState = .loading
@@ -161,6 +166,7 @@ struct ExcalidrawEditor: View {
                     .opacity(isInCollaborationSpace ? 1 : 0)
                     .allowsHitTesting(isInCollaborationSpace && !isLoadingFile)
             }
+            .environment(\.excalidrawNativeViewportInsets, nativeViewportInsetsForWeb)
             .allowsHitTesting(!isLoadingFile)
             .ignoresSafeArea(.container, edges: canvasIgnoredSafeAreaEdges)
 #if os(iOS)
@@ -199,6 +205,11 @@ struct ExcalidrawEditor: View {
                 .background(.background)
                 .navigationTitle(String(localizable: .aiChatTitle))
                 .navigationBarTitleDisplayMode(.inline)
+        }
+        .background {
+            NativeViewportInsetsMeasurementView(
+                insets: $measuredNativeViewportInsets
+            )
         }
 #endif
         .animation(.smooth(duration: 0.3), value: layoutState.isAIChatIslandMode)
@@ -621,6 +632,27 @@ struct ExcalidrawEditor: View {
 }
 
 #if os(iOS)
+private struct NativeViewportInsetsMeasurementView: View {
+    @Binding var insets: ExcalidrawNativeViewportInsets
+
+    var body: some View {
+        GeometryReader { proxy in
+            let topInset = max(
+                proxy.safeAreaInsets.top,
+                proxy.frame(in: .global).minY
+            )
+            let measuredInsets = ExcalidrawNativeViewportInsets(top: topInset)
+
+            Color.clear
+                .allowsHitTesting(false)
+                .watch(value: measuredInsets, initial: true) { _, newValue in
+                    insets = newValue
+                }
+        }
+        .allowsHitTesting(false)
+    }
+}
+
 private extension View {
     func dismissKeyboardOnCanvasTap() -> some View {
         simultaneousGesture(

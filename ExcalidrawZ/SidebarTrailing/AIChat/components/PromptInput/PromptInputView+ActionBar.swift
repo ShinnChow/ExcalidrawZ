@@ -130,59 +130,51 @@ extension PromptInputView {
     var attachmentMenu: some View {
         let _ = AIChatRenderDebug.hit("PromptInputView.attachmentMenu")
 
-        Menu {
-            Button {
-                isImagePickerPresented = true
-            } label: {
-                Label(.localizable(.aiChatInputAttachmentMenuItemImage), systemSymbol: .photo)
-            }
-            .disabled(!canInsertImages)
-        } label: {
+#if os(iOS)
+        AIChatAttachmentMenu(
+            canInsertImages: canInsertImages,
+            isFileImporterPresented: $isImagePickerPresented,
+            selectedPhotoPickerItems: $iOSSelectedPhotoPickerItems,
+            isPhotoLibraryPickerPresented: $isIOSPhotoLibraryPickerPresented,
+            isCameraPickerPresented: $isIOSCameraPickerPresented,
+            onImagesPicked: appendAttachmentImages,
+            onImageInputUnavailable: showImageInputUnavailableToast
+        ) {
             Image(systemSymbol: .paperclip)
                 .font(.caption)
                 .frame(width: actionBarIconFrameLength, height: actionBarIconFrameLength)
         }
-        .labelStyle(.iconOnly)
-        .menuIndicator(.hidden)
         .promptActionBarHoverEffect()
-        .fileImporter(
-            isPresented: $isImagePickerPresented,
-            allowedContentTypes: [.image],
-            allowsMultipleSelection: true
-        ) { result in
-            handleImagePickerResult(result)
+
+#else
+        AIChatAttachmentMenu(
+            canInsertImages: canInsertImages,
+            isFileImporterPresented: $isImagePickerPresented,
+            onImagesPicked: appendAttachmentImages,
+            onImageInputUnavailable: showImageInputUnavailableToast
+        ) {
+            Image(systemSymbol: .paperclip)
+                .font(.caption)
+                .frame(width: actionBarIconFrameLength, height: actionBarIconFrameLength)
         }
+        .promptActionBarHoverEffect()
+
+#endif
     }
 
-    /// Resolve the picked URLs into `PlatformImage`s and request the draft
-    /// owner to append them. Each URL needs
-    /// `startAccessingSecurityScopedResource` because `fileImporter`
-    /// returns user-domain paths the app doesn't have ambient access to.
-    /// Failures are swallowed per-file: a bad image shouldn't block the rest.
     @MainActor
-    func handleImagePickerResult(_ result: Result<[URL], Error>) {
-        guard canInsertImages else {
-            alertToast(AIChatInputCapabilityError.noModelCanReadImages)
+    func appendAttachmentImages(_ images: [PendingPastedImage]) {
+        guard !images.isEmpty else { return }
+        guard canInsertImages, upgradeModelForImageInputIfNeeded() else {
+            showImageInputUnavailableToast()
             return
-        }
-        guard case .success(let urls) = result else { return }
-        guard !urls.isEmpty else { return }
-        guard upgradeModelForImageInputIfNeeded() else {
-            alertToast(
-                AIChatInputCapabilityError.noModelCanReadImages
-            )
-            return
-        }
-        var images: [PendingPastedImage] = []
-        for url in urls {
-            let didStart = url.startAccessingSecurityScopedResource()
-            defer {
-                if didStart { url.stopAccessingSecurityScopedResource() }
-            }
-            guard let image = imageFromFileURL(url) else { continue }
-            images.append(PendingPastedImage(id: UUID(), image: image))
         }
         aiChatState.requestAppendDraftImages(images, draftKey: promptDraftKey)
+    }
+
+    @MainActor
+    func showImageInputUnavailableToast() {
+        alertToast(AIChatInputCapabilityError.noModelCanReadImages)
     }
 
     @ViewBuilder

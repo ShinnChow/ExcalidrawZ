@@ -145,7 +145,9 @@ struct ExcalidrawEditorToolbarModifier: ViewModifier {
 #if os(iOS)
     @ToolbarContentBuilder
     private func iOSToolbarContent() -> some ToolbarContent {
-        sharedNavigationToolbarContent()
+        ToolbarItemGroup(placement: .topBarLeading) {
+            sharedNavigationToolbarContent()
+        }
 
         if lockedContentState.activeFileLockState != .locked {
             if usesCompactIOSBottomToolbar {
@@ -164,39 +166,40 @@ struct ExcalidrawEditorToolbarModifier: ViewModifier {
 #if os(macOS)
     @ToolbarContentBuilder
     private func macOSToolbarContent() -> some ToolbarContent {
-        sharedNavigationToolbarContent()
+        ToolbarItemGroup(placement: .navigation) {
+            sharedNavigationToolbarContent()
+        }
         macOSToolPickerToolbarContent()
         sharedPrimaryActionToolbarContent()
     }
 #endif
 
-    @ToolbarContentBuilder
-    private func sharedNavigationToolbarContent() -> some ToolbarContent {
-        ToolbarItemGroup(placement: .topBarLeading) {
-            if #available(macOS 13.0, iOS 16.0, *),
-               appPreference.sidebarLayout == .sidebar {
+    @ViewBuilder
+    private func sharedNavigationToolbarContent() -> some View {
+        if #available(macOS 13.0, iOS 16.0, *),
+           appPreference.sidebarLayout == .sidebar {
 
-            } else if containerHorizontalSizeClass != .compact {
-                Button {
-                    layoutState.isSidebarPresented.toggle()
-                } label: {
-                    Label(.localizable(.sidebarToggleName), systemSymbol: .sidebarLeft)
-                }
-            }
-            
-            if fileState.currentActiveGroup != nil {
-                HStack {
-                    NavigationBackButton()
-                    title()
-                    titleBarActionsMenu()
-                }
-            }
-            
-            if #available(macOS 13.0, iOS 16.0, *) { } else {
-                NewFileButton()
+        } else if containerHorizontalSizeClass != .compact {
+            Button {
+                layoutState.isSidebarPresented.toggle()
+            } label: {
+                Label(.localizable(.sidebarToggleName), systemSymbol: .sidebarLeft)
             }
         }
+
+        if fileState.currentActiveGroup != nil {
+            HStack {
+                NavigationBackButton()
+                title()
+                titleBarActionsMenu()
+            }
+        }
+
+        if #available(macOS 13.0, iOS 16.0, *) { } else {
+            NewFileButton()
+        }
     }
+
 
 #if os(macOS)
     @ToolbarContentBuilder

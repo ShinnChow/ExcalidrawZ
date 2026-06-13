@@ -50,6 +50,14 @@ struct AISettingsView: View {
         false
 #endif
     }
+
+    var usesToolbarSettingsTabs: Bool {
+#if os(iOS)
+        !usesCompactSettingsLayout
+#else
+        false
+#endif
+    }
     
     var body: some View {
         SwiftUI.Group {
@@ -71,9 +79,15 @@ struct AISettingsView: View {
         }
 #if os(iOS)
         .toolbar {
-            if usesCompactSettingsLayout, prefs.isAIEnabled {
-                ToolbarItemGroup(placement: .bottomBar) {
-                    bottomTabBar
+            if prefs.isAIEnabled {
+                if usesCompactSettingsLayout {
+                    ToolbarItemGroup(placement: .bottomBar) {
+                        bottomTabBar
+                    }
+                } else {
+                    ToolbarItemGroup(placement: .automatic) {
+                        toolbarTabBar
+                    }
                 }
             }
         }

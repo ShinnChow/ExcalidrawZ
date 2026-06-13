@@ -196,6 +196,7 @@ struct AIChatView: View {
                     .transition(.opacity)
             }
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .toolbar(content: toolbar)
         .confirmationDialog(
             String(localizable: .aiChatClearChatConfimationDialogTitle),
@@ -217,13 +218,13 @@ struct AIChatView: View {
         .background {
             debugPublishProbe
         }
-        .task {
-            guard isAIAvailable, prefs.isAIEnabled else { return }
-            await LLMCreditsRefreshCoordinator.shared.refreshCredits(reason: .aiChatAppear)
-        }
         .watch(value: prefs.isAIEnabled) { isEnabled in
             guard !isEnabled else { return }
             cancelAIWorkForDisabledAI()
+        }
+        .task {
+            guard isAIAvailable, prefs.isAIEnabled else { return }
+            await LLMCreditsRefreshCoordinator.shared.refreshCredits(reason: .aiChatAppear)
         }
     }
 

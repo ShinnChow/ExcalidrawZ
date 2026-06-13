@@ -31,7 +31,9 @@ extension AISettingsView {
 
                     if prefs.isAIEnabled {
                         VStack(alignment: .trailing, spacing: 12) {
-                            tabPicker
+                            if !usesToolbarSettingsTabs {
+                                tabPicker
+                            }
                             accessory()
                         }
                     }
@@ -44,12 +46,16 @@ extension AISettingsView {
                     if prefs.isAIEnabled {
                         ViewThatFits(in: .horizontal) {
                             HStack(alignment: .center, spacing: 12) {
-                                tabPicker
+                                if !usesToolbarSettingsTabs {
+                                    tabPicker
+                                }
                                 accessory()
                             }
 
                             VStack(alignment: .leading, spacing: 10) {
-                                tabPicker
+                                if !usesToolbarSettingsTabs {
+                                    tabPicker
+                                }
                                 accessory()
                             }
                         }
@@ -73,18 +79,29 @@ extension AISettingsView {
     @ViewBuilder
     var bottomTabBar: some View {
         ForEach(SettingsTab.allCases) { tab in
-            Button {
-                withAnimation(.easeInOut(duration: 0.18)) {
-                    selectedTab = tab
-                }
-            } label: {
-                Label(tab.title, systemSymbol: tab.iconSymbol)
-            }
-            .labelStyle(.iconOnly)
-            .foregroundStyle(selectedTab == tab ? Color.accentColor : Color.primary)
-            .tint(selectedTab == tab ? Color.accentColor : Color.primary)
-            .help(tab.title)
+            toolbarTabButton(tab)
         }
+    }
+
+    @ViewBuilder
+    var toolbarTabBar: some View {
+        ForEach(SettingsTab.allCases) { tab in
+            toolbarTabButton(tab)
+        }
+    }
+
+    private func toolbarTabButton(_ tab: SettingsTab) -> some View {
+        Button {
+            withAnimation(.easeInOut(duration: 0.18)) {
+                selectedTab = tab
+            }
+        } label: {
+            Label(tab.title, systemSymbol: tab.iconSymbol)
+        }
+        .labelStyle(.iconOnly)
+        .foregroundStyle(selectedTab == tab ? Color.accentColor : Color.primary)
+        .tint(selectedTab == tab ? Color.accentColor : Color.primary)
+        .help(tab.title)
     }
 #endif
 

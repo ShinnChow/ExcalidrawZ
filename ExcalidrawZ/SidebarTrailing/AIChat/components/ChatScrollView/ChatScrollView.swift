@@ -61,9 +61,6 @@ struct ChatScrollView<RowContent: View>: View {
     
     var body: some View {
         scrollContent
-            .mask {
-                edgeFadeMask
-            }
     }
     
     @ViewBuilder
@@ -132,26 +129,6 @@ struct ChatScrollView<RowContent: View>: View {
         }
     }
     
-    private var edgeFadeMask: some View {
-        VStack(spacing: 0) {
-            LinearGradient(
-                colors: [.clear, .black],
-                startPoint: .top,
-                endPoint: .bottom
-            )
-            .frame(height: 54)
-            
-            Color.black
-            
-            LinearGradient(
-                colors: [.black, .clear],
-                startPoint: .top,
-                endPoint: .bottom
-            )
-            .frame(height: 76)
-        }
-    }
-    
     private var contentRevision: String {
         (
             nativeRows.map { "\($0.id):\($0.renderKey)" }
@@ -160,7 +137,7 @@ struct ChatScrollView<RowContent: View>: View {
         )
         .joined(separator: "|")
     }
-    
+
     private var nativeRows: [NativeChatRowSnapshot] {
         rows.map { row in
             NativeChatRowSnapshot(

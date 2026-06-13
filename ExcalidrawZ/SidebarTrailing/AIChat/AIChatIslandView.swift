@@ -310,13 +310,19 @@ struct AIChatIslandView: View {
                     Image(systemSymbol: .arrowDownLeftAndArrowUpRight)
                         .font(.system(size: 14))
                         .foregroundStyle(.secondary)
+                        .frame(width: 30, height: 30)
                 } else {
                     Image(systemSymbol: .arrowUpLeftAndArrowDownRight)
                         .font(.system(size: 14))
                         .foregroundStyle(.secondary)
+                        .frame(width: 30, height: 30)
                 }
             }
             .buttonStyle(.plain)
+            .contentShape(Rectangle())
+#if os(iOS)
+            .hoverEffect()
+#endif
             .help(.localizable(.aiChatButtonInspectMode))
         }
         .hoverCursor(.grabIdle, forceAppKit: true)
