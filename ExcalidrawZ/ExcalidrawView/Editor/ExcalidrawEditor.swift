@@ -8,6 +8,9 @@
 import SwiftUI
 import Combine
 import CoreData
+#if os(iOS)
+import UIKit
+#endif
 
 import ChocofordUI
 import Logging
@@ -15,6 +18,8 @@ import Logging
 struct ExcalidrawEditor: View {
     @Environment(\.managedObjectContext) var viewContext
     @Environment(\.alertToast) var alertToast
+    @Environment(\.containerHorizontalSizeClass) private var containerHorizontalSizeClass
+    @Environment(\.containerSize) private var containerSize
 
     @EnvironmentObject var appPreference: AppPreference
     @EnvironmentObject var fileState: FileState
@@ -25,7 +30,6 @@ struct ExcalidrawEditor: View {
     /// lives here rather than at the NavigationSplitView level.
     @EnvironmentObject var layoutState: LayoutState
     @EnvironmentObject private var lockedContentState: LockedContentStateStore
-    @ObservedObject private var aiChatPreferences = AIChatPreferences.shared
 
     let logger = Logger(label: "ExcalidrawEditor")
 
@@ -38,6 +42,7 @@ struct ExcalidrawEditor: View {
     @State private var loadingTask: Task<Void, Never>?
     @State private var fileLoadRevealTask: Task<Void, Never>?
     @State private var documentLoadCompletion: ExcalidrawDocumentLoadCompletion?
+    @State private var measuredNativeViewportInsets: ExcalidrawNativeViewportInsets = .zero
 
     @State private var conflictFileURL: URL?
     @State private var isSyncing = false
@@ -94,6 +99,34 @@ struct ExcalidrawEditor: View {
             return false
         }
     }
+
+    private var usesCompactIOSAIChatSurfaces: Bool {
+#if os(iOS)
+        ExcalidrawToolbarLayoutPolicy.usesCompactIOSBottomToolbar(
+            horizontalSizeClass: containerHorizontalSizeClass,
+            containerWidth: containerSize.width
+        )
+#else
+        false
+#endif
+    }
+
+    private var shouldFloatNavigationToolbarOverCanvas: Bool {
+#if os(iOS)
+        guard !usesCompactIOSAIChatSurfaces else { return false }
+        return UIDevice.current.userInterfaceIdiom == .pad
+#else
+        false
+#endif
+    }
+
+    private var canvasIgnoredSafeAreaEdges: Edge.Set {
+        shouldFloatNavigationToolbarOverCanvas ? .top : []
+    }
+
+    private var nativeViewportInsetsForWeb: ExcalidrawNativeViewportInsets {
+        shouldFloatNavigationToolbarOverCanvas ? measuredNativeViewportInsets : .zero
+    }
     
     
     @State private var canvasLoadingState: ExcalidrawCanvasView.LoadingState = .loading
@@ -133,27 +166,55 @@ struct ExcalidrawEditor: View {
                     .opacity(isInCollaborationSpace ? 1 : 0)
                     .allowsHitTesting(isInCollaborationSpace && !isLoadingFile)
             }
+            .environment(\.excalidrawNativeViewportInsets, nativeViewportInsetsForWeb)
             .allowsHitTesting(!isLoadingFile)
+            .ignoresSafeArea(.container, edges: canvasIgnoredSafeAreaEdges)
+#if os(iOS)
+            .dismissKeyboardOnCanvasTap()
+#endif
 
             ExcalidrawTrailingControls()
                 .opacity(isLoadingFile ? 0 : 1)
                 .allowsHitTesting(!isLoadingFile)
         }
         .readSize($editorContentSize)
-        // AI chat island floats above the editor only — sidebar / inspector /
-        // home content are *not* in this view's frame, so bottom-center here
-        // means bottom-center of the actual canvas the user is looking at.
         .overlay(alignment: .bottom) {
-            if layoutState.isAIChatIslandMode,
-               AIChatAvailability.isAvailable,
-               aiChatPreferences.isAIEnabled,
-               !fileState.currentActiveFileIsInTrash {
-                AIChatIslandView(canvasSize: editorContentSize)
-                    .padding(.bottom, 24)
-                    .transition(.scale.combined(with: .opacity))
+#if os(iOS)
+            if !usesCompactIOSAIChatSurfaces {
+                AIChatIslandOverlay(canvasSize: editorContentSize)
             }
+#else
+            AIChatIslandOverlay(canvasSize: editorContentSize)
+#endif
         }
+#if os(iOS)
+        .overlay(alignment: .bottom) {
+            CompactAIChatInputOverlay()
+        }
+        .overlay(alignment: .bottom) {
+            CompactAIChatGeneratingOverlay()
+        }
+        .overlay(alignment: .bottom) {
+            CompactAIChatProposalOverlay()
+        }
+        .overlay(alignment: .bottom) {
+            CompactAIChatDraftAttachmentsOverlay()
+        }
+        .navigationDestination(isPresented: $layoutState.isCompactAIChatFullChatPresented) {
+            AIChatView()
+                .background(.background)
+                .navigationTitle(String(localizable: .aiChatTitle))
+                .navigationBarTitleDisplayMode(.inline)
+        }
+        .background {
+            NativeViewportInsetsMeasurementView(
+                insets: $measuredNativeViewportInsets
+            )
+        }
+#endif
         .animation(.smooth(duration: 0.3), value: layoutState.isAIChatIslandMode)
+        .animation(.smooth(duration: 0.3), value: layoutState.isCompactAIChatToolbarPresented)
+        .animation(.smooth(duration: 0.3), value: layoutState.isCompactAIChatInputEditing)
         .modifier(
             LockedFileUnlockOverlayModifier(
                 activeFile: activeFile,
@@ -165,6 +226,7 @@ struct ExcalidrawEditor: View {
         .allowsHitTesting(interactionEnabled)
         .observeExcalidrawFileStatus(
             for: activeFile,
+            activeFileLockState: lockedContentState.activeFileLockState,
             conflictFileURL: $conflictFileURL,
         ) { latestData, onDone in
             handleLatestData(latestData)
@@ -180,9 +242,12 @@ struct ExcalidrawEditor: View {
 #if os(iOS)
         .applyIOSAutoSync(
             activeFile: activeFile,
+            activeFileLockState: lockedContentState.activeFileLockState,
             localFileBinding: localFileBinding
         ) { latestData in
-            await pullUpdatingFromCloud(latestData: latestData)
+            await MainActor.run {
+                handleLatestData(latestData)
+            }
         }
 #endif
         .watch(value: activeFile) { (newFile: FileState.ActiveFile?) in
@@ -193,24 +258,27 @@ struct ExcalidrawEditor: View {
             }
         }
         .watch(value: fileState.currentActiveFileIsInTrash) { _ in
-            collapseAIChatIslandIfCurrentFileIsTrashed()
+            collapseCompactAISurfacesIfCurrentFileIsTrashed()
         }
         .watch(value: layoutState.isAIChatIslandMode) { _ in
-            collapseAIChatIslandIfCurrentFileIsTrashed()
+            collapseCompactAISurfacesIfCurrentFileIsTrashed()
+        }
+        .watch(value: layoutState.isCompactAIChatToolbarPresented) { _ in
+            collapseCompactAISurfacesIfCurrentFileIsTrashed()
         }
         .task {
             await lockedContentState.prepareForActiveFileChange(to: activeFile)
             await loadExcalidrawFile(from: activeFile)
         }
         .onAppear {
-            collapseAIChatIslandIfCurrentFileIsTrashed()
+            collapseCompactAISurfacesIfCurrentFileIsTrashed()
         }
     }
 
-    private func collapseAIChatIslandIfCurrentFileIsTrashed() {
+    private func collapseCompactAISurfacesIfCurrentFileIsTrashed() {
         guard fileState.currentActiveFileIsInTrash else { return }
-        guard layoutState.isAIChatIslandMode else { return }
         layoutState.isAIChatIslandMode = false
+        layoutState.exitCompactAIChatToolbar()
     }
 
     private func beginFileLoadRevealGuard(fileID: String) {
@@ -341,8 +409,13 @@ struct ExcalidrawEditor: View {
     }
     
     private func handleLatestData(_ latestData: Data) {
+        guard lockedContentState.activeFileLockState != .locked else {
+            logger.info("Ignored cloud update while active file is locked")
+            return
+        }
+
         // Check if user has been idle long enough
-        let isIdle = if let lastEdit = lastEditTime {
+        let isIdle = if let lastEdit = latestLocalCanvasEditTime() {
             Date().timeIntervalSince(lastEdit) > idleTimeout
         } else {
             true  // No edit yet, consider idle
@@ -373,7 +446,7 @@ struct ExcalidrawEditor: View {
                 try? await Task.sleep(nanoseconds: UInt64(idleTimeout * 1_000_000_000))
 
                 // Check if still idle and still have cloud data
-                if let lastEdit = await MainActor.run(body: { self.lastEditTime }),
+                if let lastEdit = await MainActor.run(body: { self.latestLocalCanvasEditTime() }),
                    Date().timeIntervalSince(lastEdit) >= idleTimeout,
                    let stillCloudData = await MainActor.run(body: { self.latestCloudData }) {
                     // Apply deferred cloud update
@@ -396,7 +469,26 @@ struct ExcalidrawEditor: View {
         }
     }
 
+    private func latestLocalCanvasEditTime() -> Date? {
+        let mutationDate = fileState.recentLocalCanvasMutationDate(for: activeFile)
+        switch (lastEditTime, mutationDate) {
+            case (.some(let lastEdit), .some(let mutation)):
+                return max(lastEdit, mutation)
+            case (.some(let lastEdit), .none):
+                return lastEdit
+            case (.none, .some(let mutation)):
+                return mutation
+            case (.none, .none):
+                return nil
+        }
+    }
+
     private func pullUpdatingFromCloud(latestData: Data) async {
+        guard lockedContentState.activeFileLockState != .locked else {
+            self.logger.info("Skipped cloud pull while active file is locked")
+            return
+        }
+
         self.logger.info("pullUpdatingFromCloud")
         do {
             let file = try ExcalidrawFile(data: latestData, id: excalidrawFile?.id)
@@ -479,6 +571,11 @@ struct ExcalidrawEditor: View {
             return .rejected
         }
 
+        guard lockedContentState.activeFileLockState != .locked else {
+            logger.info("Blocked update while active file is locked")
+            return .rejected
+        }
+
         switch activeFile {
             case .file(let activeFile):
                 if let currentFile = excalidrawFile, file.elements == currentFile.elements {
@@ -533,3 +630,41 @@ struct ExcalidrawEditor: View {
         }
     }
 }
+
+#if os(iOS)
+private struct NativeViewportInsetsMeasurementView: View {
+    @Binding var insets: ExcalidrawNativeViewportInsets
+
+    var body: some View {
+        GeometryReader { proxy in
+            let topInset = max(
+                proxy.safeAreaInsets.top,
+                proxy.frame(in: .global).minY
+            )
+            let measuredInsets = ExcalidrawNativeViewportInsets(top: topInset)
+
+            Color.clear
+                .allowsHitTesting(false)
+                .watch(value: measuredInsets, initial: true) { _, newValue in
+                    insets = newValue
+                }
+        }
+        .allowsHitTesting(false)
+    }
+}
+
+private extension View {
+    func dismissKeyboardOnCanvasTap() -> some View {
+        simultaneousGesture(
+            TapGesture().onEnded {
+                UIApplication.shared.sendAction(
+                    #selector(UIResponder.resignFirstResponder),
+                    to: nil,
+                    from: nil,
+                    for: nil
+                )
+            }
+        )
+    }
+}
+#endif

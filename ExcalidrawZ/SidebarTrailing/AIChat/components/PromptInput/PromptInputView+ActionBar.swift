@@ -21,6 +21,14 @@ import SFSafeSymbols
 
 extension PromptInputView {
     private var actionBarIconFrameLength: CGFloat { 18 }
+    private var actionBarLeadingControlSpacing: CGFloat { 4 }
+    private var primaryActionButtonSize: ModernButtonStyleModifier.Size? {
+#if os(iOS)
+        .regular
+#else
+        nil
+#endif
+    }
 
     /// Left half of the action row: attachment menu, context-usage ring,
     /// model picker. Wrapped in an HStack so the whole group can take a
@@ -30,15 +38,15 @@ extension PromptInputView {
     func actionBarLeading() -> some View {
         let _ = AIChatRenderDebug.hit("PromptInputView.actionBarLeading")
 
-        HStack(spacing: 0) {
+        HStack(spacing: actionBarLeadingControlSpacing) {
             attachmentMenu
 
             ContextUsageRing(
-                model: activeModel,
+                maxContextTokens: activeModelContextWindowTokens,
                 onTap: conversationID != nil && !isCompactingContext
                     ? { compactCurrentContext() }
                     : nil,
-                usedTokens: nil
+                usedTokens: activeConversationEstimatedTokenUsage
             )
 
             fileAccessToggleButton
@@ -57,16 +65,17 @@ extension PromptInputView {
             toggleAIFileAccess()
         } label: {
             if #available(macOS 14.0, *) {
-                Image(systemName: activeFileAccessAllowsAI ? "eye" : "eye.slash")
+                Image(systemSymbol: activeFileAccessAllowsAI ? .eye : .eyeSlash)
                     .font(.caption)
                     .frame(width: actionBarIconFrameLength, height: actionBarIconFrameLength)
                     .contentTransition(.symbolEffect(.replace))
             } else {
-                Image(systemName: activeFileAccessAllowsAI ? "eye" : "eye.slash")
+                Image(systemSymbol: activeFileAccessAllowsAI ? .eye : .eyeSlash)
                     .font(.caption)
                     .frame(width: actionBarIconFrameLength, height: actionBarIconFrameLength)
             }
         }
+        .promptActionBarHoverEffect()
         .foregroundStyle(activeFileAccessAllowsAI ? .primary : .secondary)
         .tint(activeFileAccessAllowsAI ? .accentColor : .secondary.opacity(0.75))
         .disabled(!hasActiveFileForAIAccessControl || !canToggleAIFileAccess)
@@ -103,6 +112,12 @@ extension PromptInputView {
         }
     }
 
+    @MainActor
+    private var activeConversationEstimatedTokenUsage: Int? {
+        guard let conversationID else { return nil }
+        return llmState.estimatedTokenUsage(in: conversationID)
+    }
+
     /// Bottom-left attachment menu. Currently has only "Image" — clicking
     /// it opens the system file picker constrained to `UTType.image`,
     /// then appends accepted images to the prompt draft owner. Future
@@ -115,58 +130,51 @@ extension PromptInputView {
     var attachmentMenu: some View {
         let _ = AIChatRenderDebug.hit("PromptInputView.attachmentMenu")
 
-        Menu {
-            Button {
-                isImagePickerPresented = true
-            } label: {
-                Label(.localizable(.aiChatInputAttachmentMenuItemImage), systemSymbol: .photo)
-            }
-            .disabled(!canInsertImages)
-        } label: {
+#if os(iOS)
+        AIChatAttachmentMenu(
+            canInsertImages: canInsertImages,
+            isFileImporterPresented: $isImagePickerPresented,
+            selectedPhotoPickerItems: $iOSSelectedPhotoPickerItems,
+            isPhotoLibraryPickerPresented: $isIOSPhotoLibraryPickerPresented,
+            isCameraPickerPresented: $isIOSCameraPickerPresented,
+            onImagesPicked: appendAttachmentImages,
+            onImageInputUnavailable: showImageInputUnavailableToast
+        ) {
             Image(systemSymbol: .paperclip)
                 .font(.caption)
                 .frame(width: actionBarIconFrameLength, height: actionBarIconFrameLength)
         }
-        .labelStyle(.iconOnly)
-        .menuIndicator(.hidden)
-        .fileImporter(
-            isPresented: $isImagePickerPresented,
-            allowedContentTypes: [.image],
-            allowsMultipleSelection: true
-        ) { result in
-            handleImagePickerResult(result)
+        .promptActionBarHoverEffect()
+
+#else
+        AIChatAttachmentMenu(
+            canInsertImages: canInsertImages,
+            isFileImporterPresented: $isImagePickerPresented,
+            onImagesPicked: appendAttachmentImages,
+            onImageInputUnavailable: showImageInputUnavailableToast
+        ) {
+            Image(systemSymbol: .paperclip)
+                .font(.caption)
+                .frame(width: actionBarIconFrameLength, height: actionBarIconFrameLength)
         }
+        .promptActionBarHoverEffect()
+
+#endif
     }
 
-    /// Resolve the picked URLs into `PlatformImage`s and request the draft
-    /// owner to append them. Each URL needs
-    /// `startAccessingSecurityScopedResource` because `fileImporter`
-    /// returns user-domain paths the app doesn't have ambient access to.
-    /// Failures are swallowed per-file: a bad image shouldn't block the rest.
     @MainActor
-    func handleImagePickerResult(_ result: Result<[URL], Error>) {
-        guard canInsertImages else {
-            alertToast(AIChatInputCapabilityError.noModelCanReadImages)
+    func appendAttachmentImages(_ images: [PendingPastedImage]) {
+        guard !images.isEmpty else { return }
+        guard canInsertImages, upgradeModelForImageInputIfNeeded() else {
+            showImageInputUnavailableToast()
             return
-        }
-        guard case .success(let urls) = result else { return }
-        guard !urls.isEmpty else { return }
-        guard upgradeModelForImageInputIfNeeded() else {
-            alertToast(
-                AIChatInputCapabilityError.noModelCanReadImages
-            )
-            return
-        }
-        var images: [PendingPastedImage] = []
-        for url in urls {
-            let didStart = url.startAccessingSecurityScopedResource()
-            defer {
-                if didStart { url.stopAccessingSecurityScopedResource() }
-            }
-            guard let image = imageFromFileURL(url) else { continue }
-            images.append(PendingPastedImage(id: UUID(), image: image))
         }
         aiChatState.requestAppendDraftImages(images, draftKey: promptDraftKey)
+    }
+
+    @MainActor
+    func showImageInputUnavailableToast() {
+        alertToast(AIChatInputCapabilityError.noModelCanReadImages)
     }
 
     @ViewBuilder
@@ -176,30 +184,11 @@ extension PromptInputView {
         // Agent config hasn't loaded → show a quiet placeholder. Loading is fast
         // (one HTTP round-trip on first appearance) so a permanent skeleton would
         // be visual noise; we just render the active model name disabled.
-        let models = AIChatRenderDebug.measure("prompt.modelPicker.models") {
-            (agentConfig?.allowedModels ?? [])
-                .filter { canShowModelInPicker($0) }
-        }
-        let tiers = ExcalidrawModelTier.pickerOrder.filter { tier in
-            models.contains { $0.excalidrawTier == tier }
-        }
-        let activeTier = activeModel.excalidrawTier ?? selectedTierBeforeFallback
         Menu {
-            ForEach(tiers) { tier in
-                Button {
-                    pickTier(tier)
-                } label: {
-                    if tier == activeTier {
-                        Label(tier.name, systemSymbol: .checkmark)
-                    } else {
-                        Text(tier.name)
-                    }
-                }
-                .disabled(!canSelectTier(tier))
-            }
+            modelTierPickerButtons()
         } label: {
             HStack(spacing: 4) {
-                Text(activeModel.excalidrawTierName)
+                Text(modelPickerTitle)
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -207,7 +196,48 @@ extension PromptInputView {
             .contentShape(Rectangle())
         }
         .menuIndicator(.hidden)
-        .disabled(tiers.isEmpty)
+        .promptActionBarHoverEffect()
+        .disabled(modelPickerTiers.isEmpty)
+    }
+
+    @MainActor
+    var modelPickerTitle: String {
+        activeModelProfileOption?.title ?? "..."
+    }
+
+    @MainActor
+    var modelPickerTiers: [ExcalidrawModelTier] {
+        guard agentConfig != nil else { return [] }
+        let options = AIChatRenderDebug.measure("prompt.modelPicker.options") {
+            availableModelOptions.filter {
+                canShowModelOption($0, requiresImageInput: requiresImageInputModel)
+            }
+        }
+        return ExcalidrawModelTier.pickerOrder.filter { tier in
+            options.contains { $0.tier == tier }
+        }
+    }
+
+    @MainActor
+    var activeTierForModelPicker: ExcalidrawModelTier {
+        activeModelProfileOption?.tier ?? selectedTierBeforeFallback
+    }
+
+    @MainActor
+    @ViewBuilder
+    func modelTierPickerButtons() -> some View {
+        ForEach(modelPickerTiers) { tier in
+            Button {
+                pickTier(tier)
+            } label: {
+                if tier == activeTierForModelPicker {
+                    Label(tier.name, systemSymbol: .checkmark)
+                } else {
+                    Text(tier.name)
+                }
+            }
+            .disabled(!canSelectTier(tier))
+        }
     }
 
     /// Route a tier pick to the right place: existing conversations get a
@@ -227,9 +257,8 @@ extension PromptInputView {
 
     @MainActor
     func canSelectTier(_ tier: ExcalidrawModelTier) -> Bool {
-        let models = agentConfig?.allowedModels ?? []
-        return models.contains { model in
-            model.excalidrawTier == tier && canSelectModel(model)
+        availableModelOptions.contains { option in
+            option.tier == tier && canSelectModelOption(option)
         }
     }
 
@@ -304,8 +333,22 @@ extension PromptInputView {
                     .frame(width: 16, height: 16)
             }
         }
-        .modernButtonStyle(style: .glass, shape: .circle)
+        .modernButtonStyle(style: .glass, size: primaryActionButtonSize, shape: .circle)
         // Stop is always enabled while generating. Send needs text.
         .disabled(!primaryActionIsStop && !hasInputText)
+    }
+}
+
+private extension View {
+    @ViewBuilder
+    func promptActionBarHoverEffect() -> some View {
+#if os(iOS)
+        self
+            .frame(minWidth: 32, minHeight: 32)
+            .contentShape(Rectangle())
+            .hoverEffect()
+#else
+        self
+#endif
     }
 }

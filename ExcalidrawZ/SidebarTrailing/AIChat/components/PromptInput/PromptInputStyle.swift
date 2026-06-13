@@ -17,6 +17,12 @@
 
 import SwiftUI
 
+enum PromptInputSurface {
+    case inspector
+    case island
+    case compactIOSIsland
+}
+
 /// Visual knobs for `PromptInputView`. Lets callers tune the prompt block to
 /// the chrome it's embedded in — the inspector panel wants prominent shadow,
 /// border and the low-credits banner; the floating island shares the same
@@ -28,6 +34,8 @@ import SwiftUI
 /// default is materialized as a typed sentinel view (`PlatformDefaultPromptBackground`)
 /// so presets that want it don't need a closure.
 struct PromptInputStyle<Background: View> {
+    var surface: PromptInputSurface
+
     /// Whether the "Only N credits left" hint above the input is visible.
     /// Hosts with limited vertical space usually turn this off.
     var showsLowCreditsBanner: Bool
@@ -55,6 +63,7 @@ struct PromptInputStyle<Background: View> {
 
     /// Caller supplies a custom backdrop via `@ViewBuilder`.
     init(
+        surface: PromptInputSurface = .inspector,
         showsLowCreditsBanner: Bool = true,
         cornerRadius: CGFloat = 20,
         shadow: ShadowSpec? = ShadowSpec(opacity: 0.2, radius: 4),
@@ -62,6 +71,7 @@ struct PromptInputStyle<Background: View> {
         showsGeneratingEffect: Bool = true,
         @ViewBuilder background: () -> Background
     ) {
+        self.surface = surface
         self.showsLowCreditsBanner = showsLowCreditsBanner
         self.cornerRadius = cornerRadius
         self.shadow = shadow
@@ -95,6 +105,7 @@ extension PromptInputStyle where Background == PlatformDefaultPromptBackground {
     /// Most call sites should use this — only reach for the `@ViewBuilder`
     /// init when you actually need a non-default backdrop.
     init(
+        surface: PromptInputSurface = .inspector,
         showsLowCreditsBanner: Bool = true,
         cornerRadius: CGFloat = 20,
         shadow: ShadowSpec? = ShadowSpec(opacity: 0.2, radius: 4),
@@ -102,6 +113,7 @@ extension PromptInputStyle where Background == PlatformDefaultPromptBackground {
         showsGeneratingEffect: Bool = true
     ) {
         self.init(
+            surface: surface,
             showsLowCreditsBanner: showsLowCreditsBanner,
             cornerRadius: cornerRadius,
             shadow: shadow,
@@ -129,6 +141,7 @@ extension PromptInputStyle where Background == PlatformDefaultPromptBackground {
     /// rim glow on top makes the whole panel look noisy.
     static var island: PromptInputStyle<PlatformDefaultPromptBackground> {
          PromptInputStyle(
+             surface: .island,
              showsLowCreditsBanner: false,
              cornerRadius: 24,
              shadow: .init(color: .clear, radius: 0),
@@ -136,6 +149,18 @@ extension PromptInputStyle where Background == PlatformDefaultPromptBackground {
              showsGeneratingEffect: false
          )
     }
+
+    static var compactIOSIsland: PromptInputStyle<PlatformDefaultPromptBackground> {
+         PromptInputStyle(
+             surface: .compactIOSIsland,
+             showsLowCreditsBanner: false,
+             cornerRadius: 24,
+             shadow: nil,
+             border: nil,
+             showsGeneratingEffect: false
+         )
+    }
+
 }
 
 /// Glass on macOS 26+ / iOS 26+, `regularMaterial` below. Materialized as a

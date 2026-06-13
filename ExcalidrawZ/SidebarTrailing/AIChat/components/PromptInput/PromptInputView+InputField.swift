@@ -12,6 +12,7 @@
 
 import SwiftUI
 import ChocofordUI
+import UniformTypeIdentifiers
 #if canImport(AppKit)
 import AppKit
 #elseif canImport(UIKit)
@@ -78,6 +79,10 @@ extension PromptInputView {
             draftState: promptDraftState,
             showsAttachments: false,
             sendRequestToken: draftSendRequestToken,
+            maxTextAreaHeight: nil,
+            textInsets: nil,
+            linesOverflow: nil,
+            onTextAreaSingleLineChanged: nil,
             focus: $isInputFocused,
             onSubmit: { text, images in
                 submitDraft(prompt: text, pastedImages: images)
@@ -104,6 +109,10 @@ extension PromptInputView {
                 draftState: promptDraftState,
                 showsAttachments: true,
                 sendRequestToken: draftSendRequestToken,
+                maxTextAreaHeight: nil,
+                textInsets: nil,
+                linesOverflow: nil,
+                onTextAreaSingleLineChanged: nil,
                 focus: $isInputFocused,
                 onSubmit: { text, images in
                     submitDraft(prompt: text, pastedImages: images)
@@ -168,6 +177,7 @@ extension PromptInputView {
         return nil
 #endif
     }
+
 }
 
 enum PromptImagePasteResult {
@@ -177,14 +187,19 @@ enum PromptImagePasteResult {
 }
 
 @MainActor
-private struct PromptDraftInputField: View {
+struct PromptDraftInputField: View {
     @EnvironmentObject private var aiChatState: AIChatState
     let draftKey: String
     @ObservedObject var draftState: AIChatPromptDraftState
 
     let showsAttachments: Bool
     let sendRequestToken: Int
+    let maxTextAreaHeight: CGFloat?
+    let textInsets: EdgeInsets?
+    let linesOverflow: Binding<Bool>?
+    let onTextAreaSingleLineChanged: ((Bool) -> Void)?
     let focus: FocusState<Bool>.Binding
+    var autofocus: Bool = false
     let onSubmit: (String, [PendingPastedImage]) -> Bool
     let onPaste: (TextAreaPasteItem) -> PromptImagePasteResult
     let onSummaryChange: (Bool, Bool) -> Void
@@ -213,7 +228,12 @@ private struct PromptDraftInputField: View {
 
             PromptDraftTextArea(
                 text: textBinding,
+                maxHeight: maxTextAreaHeight,
+                textInsets: textInsets,
+                linesOverflow: linesOverflow,
+                onSingleLineChanged: onTextAreaSingleLineChanged,
                 focus: focus,
+                autofocus: autofocus,
                 onSubmit: submit,
                 onPaste: handlePaste
             )
@@ -239,6 +259,11 @@ private struct PromptDraftInputField: View {
         .watch(value: aiChatState.editCancelRequest?.token) {
             handleEditCancelRequest(aiChatState.editCancelRequest)
         }
+        .onDrop(
+            of: PromptDraftInputDrop.supportedTypeIdentifiers,
+            isTargeted: nil,
+            perform: handleDrop
+        )
     }
 
     private func handleDraftRequest(_ req: AIChatState.DraftRequest?) {
@@ -308,6 +333,9 @@ private struct PromptDraftInputField: View {
     private func handlePaste(_ item: TextAreaPasteItem) -> TextAreaInsertion? {
         switch onPaste(item) {
             case .notHandled:
+                if case .url(let url) = item {
+                    return .text(url.absoluteString)
+                }
                 return nil
             case .rejected:
                 return .action {}
@@ -317,16 +345,146 @@ private struct PromptDraftInputField: View {
                 return .action {}
         }
     }
+
+    private func handleDrop(_ providers: [NSItemProvider]) -> Bool {
+        let supportedProviders = providers.filter { provider in
+            PromptDraftInputDrop.supportedTypeIdentifiers.contains { typeIdentifier in
+                provider.hasItemConformingToTypeIdentifier(typeIdentifier)
+            }
+        }
+        guard !supportedProviders.isEmpty else { return false }
+
+        Task {
+            for provider in supportedProviders {
+                let items = await PromptDraftInputDrop.loadItems(from: provider)
+                for item in items {
+                    handleDroppedItem(item)
+                }
+            }
+        }
+        return true
+    }
+
+    private func handleDroppedItem(_ item: TextAreaPasteItem) {
+        switch onPaste(item) {
+            case .notHandled:
+                if case .url(let url) = item {
+                    appendDroppedText(url.absoluteString)
+                }
+            case .rejected:
+                break
+            case .accepted(let image):
+                draftState.images.append(image)
+                publishSummary()
+        }
+    }
+
+    private func appendDroppedText(_ value: String) {
+        let trimmedValue = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedValue.isEmpty else { return }
+
+        if draftState.text.isEmpty {
+            draftState.text = trimmedValue
+        } else {
+            draftState.text += "\n\(trimmedValue)"
+        }
+        publishSummary()
+    }
 }
 
+private enum PromptDraftInputDrop {
+    static let supportedTypeIdentifiers: [String] = [
+        UTType.image.identifier,
+        UTType.fileURL.identifier,
+        UTType.url.identifier
+    ]
+
+    static func loadItems(from provider: NSItemProvider) async -> [TextAreaPasteItem] {
+        if let image = await loadImage(from: provider) {
+            return [.image(image)]
+        }
+        if let fileURL = await loadURL(from: provider, type: .fileURL), fileURL.isFileURL {
+            return [.fileURL(fileURL)]
+        }
+        if let url = await loadURL(from: provider, type: .url), !url.isFileURL {
+            return [.url(url)]
+        }
+        return []
+    }
+
+    private static func loadImage(from provider: NSItemProvider) async -> PlatformImage? {
+        guard provider.hasItemConformingToTypeIdentifier(UTType.image.identifier),
+              let data = await loadData(from: provider, typeIdentifier: UTType.image.identifier)
+        else { return nil }
+
+#if canImport(AppKit)
+        return NSImage(data: data)
+#elseif canImport(UIKit)
+        return UIImage(data: data)
+#else
+        return nil
+#endif
+    }
+
+    private static func loadData(
+        from provider: NSItemProvider,
+        typeIdentifier: String
+    ) async -> Data? {
+        await withCheckedContinuation { continuation in
+            provider.loadDataRepresentation(forTypeIdentifier: typeIdentifier) { data, _ in
+                continuation.resume(returning: data)
+            }
+        }
+    }
+
+    private static func loadURL(
+        from provider: NSItemProvider,
+        type: UTType
+    ) async -> URL? {
+        guard provider.hasItemConformingToTypeIdentifier(type.identifier) else { return nil }
+        return await withCheckedContinuation { continuation in
+            provider.loadItem(forTypeIdentifier: type.identifier, options: nil) { item, _ in
+                continuation.resume(returning: url(from: item))
+            }
+        }
+    }
+
+    private static func url(from item: NSSecureCoding?) -> URL? {
+        if let url = item as? URL {
+            return url
+        }
+        if let url = item as? NSURL {
+            return url as URL
+        }
+        if let data = item as? Data {
+            return URL(dataRepresentation: data, relativeTo: nil)
+        }
+        if let string = item as? String {
+            return URL(string: string)
+        }
+        return nil
+    }
+}
+
+@MainActor
 private struct PromptDraftTextArea: View {
     let text: Binding<String>
+    let maxHeight: CGFloat?
+    let textInsets: EdgeInsets?
+    let linesOverflow: Binding<Bool>?
+    let onSingleLineChanged: ((Bool) -> Void)?
     let focus: FocusState<Bool>.Binding
+    var autofocus: Bool = false
     let onSubmit: () -> Void
     let onPaste: (TextAreaPasteItem) -> TextAreaInsertion?
 
     var body: some View {
-        TextArea(
+        configuredTextArea
+            .focused(focus)
+    }
+
+    private var configuredTextArea: TextArea {
+        var textArea = TextArea(
             text: text,
             placeholder: Text(localizable: .aiChatInputPlaceholder)
         )
@@ -334,26 +492,27 @@ private struct PromptDraftTextArea: View {
             onPaste(item)
         }
         .promptInputSubmitOnReturn(onSubmit)
-        .focused(focus)
+
+        if let maxHeight {
+            textArea = textArea.maxHeight(maxHeight)
+        }
+        if let textInsets {
+            textArea = textArea.textInsets(textInsets)
+        }
+        if let linesOverflow {
+            textArea = textArea.linesOverflow(linesOverflow)
+        }
+        if let onSingleLineChanged {
+            textArea = textArea.onSingleLineChanged(onSingleLineChanged)
+        }
+        textArea = textArea.autofocus(autofocus)
+        return textArea
     }
 }
 
 private extension TextArea {
     func promptInputSubmitOnReturn(_ submit: @escaping () -> Void) -> TextArea {
-#if os(macOS)
-        self.keyDownHandler(
-            TextFieldKeyDownEventHandler(triggers: [(36, nil)]) { event in
-                guard let event else { return nil }
-                if event.keyCode == 36, !event.modifierFlags.contains(.shift) {
-                    submit()
-                    return nil
-                }
-                return event
-            }
-        )
-#else
-        self
-#endif
+        self.submitOnReturn(submit)
     }
 }
 

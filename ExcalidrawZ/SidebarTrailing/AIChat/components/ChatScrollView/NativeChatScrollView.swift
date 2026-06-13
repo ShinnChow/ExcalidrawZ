@@ -45,7 +45,9 @@ struct NativeChatScrollView<Content: View>: View {
     @Binding var scrollToBottomRequest: ScrollToBottomRequest
     private let isStreaming: Bool
     private let contentRevision: AnyHashable
+    private let bottomContentPadding: CGFloat
     private let onReachTop: (() -> Void)?
+    private let onUserDragStart: (() -> Void)?
     /// Fired once the token-driven scroll-to-bottom animation finishes
     /// (or its safety timeout fires). The closure receives the token
     /// that initiated the scroll, so the caller can correlate it back
@@ -59,7 +61,9 @@ struct NativeChatScrollView<Content: View>: View {
         scrollToBottomRequest: Binding<ScrollToBottomRequest>,
         isStreaming: Bool = false,
         contentRevision: some Hashable,
+        bottomContentPadding: CGFloat = 0,
         onReachTop: (() -> Void)? = nil,
+        onUserDragStart: (() -> Void)? = nil,
         onScrollAnimationComplete: ((Int) -> Void)? = nil,
         @ViewBuilder content: () -> Content
     ) {
@@ -67,7 +71,9 @@ struct NativeChatScrollView<Content: View>: View {
         _scrollToBottomRequest = scrollToBottomRequest
         self.isStreaming = isStreaming
         self.contentRevision = AnyHashable(contentRevision)
+        self.bottomContentPadding = bottomContentPadding
         self.onReachTop = onReachTop
+        self.onUserDragStart = onUserDragStart
         self.onScrollAnimationComplete = onScrollAnimationComplete
         self.content = content()
     }
@@ -80,6 +86,7 @@ struct NativeChatScrollView<Content: View>: View {
             isStreaming: isStreaming,
             contentRevision: contentRevision,
             onReachTop: onReachTop,
+            onUserDragStart: onUserDragStart,
             onScrollAnimationComplete: onScrollAnimationComplete,
             content: wrappedContent
         )
@@ -90,6 +97,7 @@ struct NativeChatScrollView<Content: View>: View {
             isStreaming: isStreaming,
             contentRevision: contentRevision,
             onReachTop: onReachTop,
+            onUserDragStart: onUserDragStart,
             onScrollAnimationComplete: onScrollAnimationComplete,
             content: wrappedContent
         )
@@ -104,7 +112,7 @@ struct NativeChatScrollView<Content: View>: View {
     private var wrappedContent: some View {
         VStack(spacing: 0) {
             content
-            Color.clear.frame(height: 20)
+            Color.clear.frame(height: 20 + bottomContentPadding)
         }
         .padding(.horizontal, 10)
     }
@@ -120,6 +128,7 @@ private struct AppKitChatScrollHost<Content: View>: NSViewRepresentable {
     let isStreaming: Bool
     let contentRevision: AnyHashable
     let onReachTop: (() -> Void)?
+    let onUserDragStart: (() -> Void)?
     let onScrollAnimationComplete: ((Int) -> Void)?
     let content: Content
 
@@ -131,6 +140,7 @@ private struct AppKitChatScrollHost<Content: View>: NSViewRepresentable {
         var scrollToBottomRequest: Binding<ScrollToBottomRequest>
         var isStreaming: Bool
         var onReachTop: (() -> Void)?
+        var onUserDragStart: (() -> Void)?
         var onScrollAnimationComplete: ((Int) -> Void)?
         var lastSeenToken: Int
         /// Token of the in-flight programmatic scroll-to-bottom, if any.
@@ -182,12 +192,14 @@ private struct AppKitChatScrollHost<Content: View>: NSViewRepresentable {
             scrollToBottomRequest: Binding<ScrollToBottomRequest>,
             isStreaming: Bool,
             onReachTop: (() -> Void)?,
+            onUserDragStart: (() -> Void)?,
             onScrollAnimationComplete: ((Int) -> Void)?
         ) {
             self.isPinnedToBottom = isPinnedToBottom
             self.scrollToBottomRequest = scrollToBottomRequest
             self.isStreaming = isStreaming
             self.onReachTop = onReachTop
+            self.onUserDragStart = onUserDragStart
             self.onScrollAnimationComplete = onScrollAnimationComplete
             self.lastSeenToken = scrollToBottomRequest.wrappedValue.token
             super.init()
@@ -391,6 +403,7 @@ private struct AppKitChatScrollHost<Content: View>: NSViewRepresentable {
             scrollToBottomRequest: $scrollToBottomRequest,
             isStreaming: isStreaming,
             onReachTop: onReachTop,
+            onUserDragStart: onUserDragStart,
             onScrollAnimationComplete: onScrollAnimationComplete
         )
     }
@@ -489,6 +502,7 @@ private struct AppKitChatScrollHost<Content: View>: NSViewRepresentable {
         context.coordinator.scrollToBottomRequest = $scrollToBottomRequest
         context.coordinator.isStreaming = isStreaming
         context.coordinator.onReachTop = onReachTop
+        context.coordinator.onUserDragStart = onUserDragStart
         context.coordinator.onScrollAnimationComplete = onScrollAnimationComplete
         if context.coordinator.lastContentRevision != contentRevision {
             context.coordinator.hostingView?.rootView = content
@@ -536,6 +550,7 @@ private struct UIKitChatScrollHost<Content: View>: UIViewRepresentable {
     let isStreaming: Bool
     let contentRevision: AnyHashable
     let onReachTop: (() -> Void)?
+    let onUserDragStart: (() -> Void)?
     let onScrollAnimationComplete: ((Int) -> Void)?
     let content: Content
 
@@ -544,6 +559,7 @@ private struct UIKitChatScrollHost<Content: View>: UIViewRepresentable {
         var scrollToBottomRequest: Binding<ScrollToBottomRequest>
         var isStreaming: Bool
         var onReachTop: (() -> Void)?
+        var onUserDragStart: (() -> Void)?
         var onScrollAnimationComplete: ((Int) -> Void)?
         var lastSeenToken: Int
         /// See macOS Coordinator: token of the in-flight programmatic
@@ -579,12 +595,14 @@ private struct UIKitChatScrollHost<Content: View>: UIViewRepresentable {
             scrollToBottomRequest: Binding<ScrollToBottomRequest>,
             isStreaming: Bool,
             onReachTop: (() -> Void)?,
+            onUserDragStart: (() -> Void)?,
             onScrollAnimationComplete: ((Int) -> Void)?
         ) {
             self.isPinnedToBottom = isPinnedToBottom
             self.scrollToBottomRequest = scrollToBottomRequest
             self.isStreaming = isStreaming
             self.onReachTop = onReachTop
+            self.onUserDragStart = onUserDragStart
             self.onScrollAnimationComplete = onScrollAnimationComplete
             self.lastSeenToken = scrollToBottomRequest.wrappedValue.token
         }
@@ -593,6 +611,10 @@ private struct UIKitChatScrollHost<Content: View>: UIViewRepresentable {
             guard !isProgrammaticScroll else { return }
             updatePinnedBinding()
             notifyReachTopIfNeeded(scrollView)
+        }
+
+        func scrollViewWillBeginDragging(_ scrollView: UIScrollView) {
+            onUserDragStart?()
         }
 
         private func notifyReachTopIfNeeded(_ scrollView: UIScrollView) {
@@ -725,6 +747,7 @@ private struct UIKitChatScrollHost<Content: View>: UIViewRepresentable {
             scrollToBottomRequest: $scrollToBottomRequest,
             isStreaming: isStreaming,
             onReachTop: onReachTop,
+            onUserDragStart: onUserDragStart,
             onScrollAnimationComplete: onScrollAnimationComplete
         )
     }
@@ -734,6 +757,7 @@ private struct UIKitChatScrollHost<Content: View>: UIViewRepresentable {
         scrollView.delegate = context.coordinator
         scrollView.alwaysBounceVertical = true
         scrollView.contentInsetAdjustmentBehavior = .never
+        scrollView.keyboardDismissMode = .interactive
         scrollView.backgroundColor = .clear
         // Same as the macOS side: let chat rows bleed past the
         // top edge into surrounding chrome instead of getting a
@@ -773,6 +797,7 @@ private struct UIKitChatScrollHost<Content: View>: UIViewRepresentable {
         context.coordinator.scrollToBottomRequest = $scrollToBottomRequest
         context.coordinator.isStreaming = isStreaming
         context.coordinator.onReachTop = onReachTop
+        context.coordinator.onUserDragStart = onUserDragStart
         context.coordinator.onScrollAnimationComplete = onScrollAnimationComplete
         if context.coordinator.lastContentRevision != contentRevision {
             context.coordinator.hostingController?.rootView = content

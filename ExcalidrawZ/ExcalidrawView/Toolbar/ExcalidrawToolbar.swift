@@ -11,11 +11,13 @@ import Combine
 import SFSafeSymbols
 import ChocofordUI
 
+#if canImport(UIKit)
+import UIKit
+#endif
+
 struct ExcalidrawToolbar: View {
-    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @Environment(\.containerHorizontalSizeClass) private var containerHorizontalSizeClass
     @Environment(\.alertToast) private var alertToast
-    @Environment(\.colorScheme) private var colorScheme
     
     @EnvironmentObject var fileState: FileState
     @EnvironmentObject var toolState: ToolState
@@ -29,10 +31,6 @@ struct ExcalidrawToolbar: View {
     @State private var windowFrameCancellable: AnyCancellable?
     @State private var isApplePencilDisconnectConfirmationDialogPresented = false
     
-    @State private var isMathInputSheetPresented = false
-    @State private var isMermaidInputSheetPresented = false
-    @State private var isPDFPickerPresented = false
-
     private var activeCoordinator: ExcalidrawCanvasView.Coordinator? {
         switch fileState.currentActiveFile {
             case .collaborationFile:
@@ -77,74 +75,65 @@ struct ExcalidrawToolbar: View {
     
     @ViewBuilder
     private func toolbarContent() -> some View {
-#if os(iOS)
-        if horizontalSizeClass == .compact {
+        if containerHorizontalSizeClass == .compact {
             compactContent()
-        } else if containerHorizontalSizeClass != .compact, !toolState.inPenMode {
-            HStack {
-                compactContent()
-            }
-            .frame(maxWidth: 400)
-            .padding(.horizontal, 12)
-            .frame(height: 44)
-            .background {
-                if #available(iOS 26.0, *) {
-                    Capsule()
-                        .fill(.clear)
-                        .glassEffect(.clear, in: Capsule())
-                        .shadow(color: .gray.opacity(0.15), radius: colorScheme == .light ? 8 : 0, y: 4)
-                } else if #available(macOS 14.0, iOS 17.0, *) {
-                    RoundedRectangle(cornerRadius: 12)
-                        .fill(.regularMaterial)
-                        .stroke(.separator, lineWidth: 0.5)
-                } else {
-                    RoundedRectangle(cornerRadius: 12)
-                        .fill(.regularMaterial)
-                }
-            }
-        } else if toolState.inPenMode {
+        } else {
+#if os(iOS)
             HStack(spacing: 10) {
-                Text("Pencil Mode")
+                adaptiveToolPickerContent()
             }
-            .frame(maxWidth: 400)
-            .padding(6)
-            .background {
-                if #available(macOS 14.0, iOS 17.0, *) {
-                    RoundedRectangle(cornerRadius: 12)
-                        .fill(.regularMaterial)
-                        .stroke(.separator, lineWidth: 0.5)
-                } else {
-                    RoundedRectangle(cornerRadius: 12)
-                        .fill(.regularMaterial)
-                }
-            }
+#else
+            adaptiveToolPickerContent()
+#endif
         }
-#elseif os(macOS)
+    }
+    
+    @ViewBuilder
+    private func adaptiveToolPickerContent() -> some View {
         leadingTollsContent()
-        
+#if os(iOS)
+            .excalidrawToolbarSurface(.circle)
+#endif
         ExcalidrawToolbarToolContainer { sizeClass in
+            let pickerItems = toolbarPickerItems(for: sizeClass)
+            
             HStack(spacing: 10) {
                 ZStack {
                     Color.clear
                     if sizeClass == .dense {
                         denseContent()
                     } else {
-                        segmentedPicker(sizeClass: sizeClass)
+                        segmentedPicker(
+                            sizeClass: sizeClass,
+                            primaryPickerItems: pickerItems.primary,
+                            secondaryPickerItems: pickerItems.secondary
+                        )
                     }
                 }
             }
-            
+#if os(iOS)
+            .excalidrawToolbarSurface(.capsule)
+#endif
             
             if #available(macOS 26.0, iOS 26.0, *),
-               !secondaryPickerItems.isEmpty,
-               let tool = toolState.activatedTool,
-               sizeClass != .dense {
-                secondaryPickerItemsMenu(tool: tool)
+               !pickerItems.secondary.isEmpty,
+               sizeClass != .dense,
+               let tool = toolState.activatedTool {
+                secondaryPickerItemsMenu(
+                    tool: tool,
+                    secondaryPickerItems: pickerItems.secondary
+                )
+#if os(iOS)
+                .excalidrawToolbarSurface(.circle)
+#endif
             }
         }
         
         moreTools()
+#if os(iOS)
+            .excalidrawToolbarSurface(.circle)
 #endif
+        
     }
     
     @ViewBuilder
@@ -168,15 +157,65 @@ struct ExcalidrawToolbar: View {
     
     @State private var lastActivatedSecondaryTool: ExcalidrawTool?
     
+    private func toolbarPickerItems(
+        for sizeClass: ExcalidrawToolbarToolSizeClass
+    ) -> (primary: [ExcalidrawTool], secondary: [ExcalidrawTool]) {
+        switch sizeClass {
+            case .dense:
+                return (
+                    [.cursor, .rectangle, .diamond, .ellipse, .arrow, .line],
+                    [.freedraw, .text, .image, .eraser, .laser, .lasso, .hand, .frame, .webEmbed, .magicFrame]
+                )
+            case .compact:
+                return (
+                    [.cursor, .rectangle, .diamond, .ellipse, .arrow, .line],
+                    [.freedraw, .text, .image, .eraser, .laser, .lasso, .hand, .frame, .webEmbed, .magicFrame]
+                )
+            case .regular:
+                return (
+                    [.cursor, .rectangle, .diamond, .ellipse, .arrow, .line, .freedraw, .text, .image],
+                    [.eraser, .laser, .lasso, .hand, .frame, .webEmbed, .magicFrame]
+                )
+            case .expanded:
+                return (
+                    [
+                        .cursor,
+                        .rectangle,
+                        .diamond,
+                        .ellipse,
+                        .arrow,
+                        .line,
+                        .freedraw,
+                        .text,
+                        .image,
+                        .eraser,
+                        .laser,
+                        .lasso,
+                        .hand,
+                        .frame,
+                        .webEmbed,
+                        .magicFrame,
+                    ],
+                    []
+                )
+        }
+    }
+    
     @ViewBuilder
     private func segmentedPicker(
         sizeClass: ExcalidrawToolbarToolSizeClass,
+        primaryPickerItems: [ExcalidrawTool],
+        secondaryPickerItems: [ExcalidrawTool],
         size: CGFloat = 20,
         withFooter: Bool = true
     ) -> some View {
         HStack(spacing: size / 2) {
             SegmentedPicker(selection: $toolState.activatedTool) {
-                primaryToolPikcerItems(size: size, withFooter: withFooter)
+                primaryToolPikcerItems(
+                    primaryPickerItems,
+                    size: size,
+                    withFooter: withFooter
+                )
             }
             .padding({
                 if #available(macOS 26.0, iOS 26.0, *) {
@@ -203,68 +242,40 @@ struct ExcalidrawToolbar: View {
                         .fill(.regularMaterial)
                 }
             }
-            .watch(value: sizeClass) {
-                _,
-                newValue in
-                if newValue == .compact {
-                    primaryPickerItems = [.cursor, .rectangle, .diamond, .ellipse, .arrow, .line]
-                    secondaryPickerItems = [.freedraw, .text, .image, .eraser, .laser, .lasso, .hand, .frame, .webEmbed, .magicFrame]
-                } else if newValue == .regular {
-                    primaryPickerItems = [.cursor, .rectangle, .diamond, .ellipse, .arrow, .line, .freedraw, .text, .image]
-                    secondaryPickerItems = [.eraser, .laser, .lasso, .hand, .frame, .webEmbed, .magicFrame,]
-                } else /*if newValue == .expanded || newValue == .dense*/ {
-                    primaryPickerItems = [
-                        .cursor,
-                        .rectangle,
-                        .diamond,
-                        .ellipse,
-                        .arrow,
-                        .line,
-                        .freedraw,
-                        .text,
-                        .image,
-                        .eraser,
-                        .laser,
-                        .lasso,
-                        .hand,
-                        .frame,
-                        .webEmbed,
-                        .magicFrame,
-                    ]
-                    secondaryPickerItems = []
-                }
-            }
-            
             if #available(macOS 26.0, iOS 26.0, *) {
                 
             } else if !secondaryPickerItems.isEmpty,
                       sizeClass != .expanded,
                       let tool = toolState.activatedTool {
-                secondaryPickerItemsMenu(tool: tool, size: size)
-                    .buttonStyle(.borderless)
-                    .padding(size / 3)
-                    .background {
-                        let isSelected = toolState.activatedTool != nil && secondaryPickerItems.contains(toolState.activatedTool!)
-                        if #available(macOS 14.0, iOS 17.0, *) {
-                            RoundedRectangle(cornerRadius: size / 1.6)
-                                .fill(
-                                    isSelected ? AnyShapeStyle(Color.accentColor.secondary) : AnyShapeStyle(Material.regularMaterial)
-                                )
-                                .stroke(.separator, lineWidth: 0.5)
-                        } else {
-                            RoundedRectangle(cornerRadius: size / 1.6)
-                                .fill(
-                                    isSelected ? AnyShapeStyle(Color.accentColor.opacity(0.3)) : AnyShapeStyle(Material.regularMaterial)
-                                )
-                            RoundedRectangle(cornerRadius: size / 1.6)
-                                .stroke(.secondary, lineWidth: 0.5)
-                        }
+                secondaryPickerItemsMenu(
+                    tool: tool,
+                    secondaryPickerItems: secondaryPickerItems,
+                    size: size
+                )
+                .buttonStyle(.borderless)
+                .padding(size / 3)
+                .background {
+                    let isSelected = toolState.activatedTool != nil && secondaryPickerItems.contains(toolState.activatedTool!)
+                    if #available(macOS 14.0, iOS 17.0, *) {
+                        RoundedRectangle(cornerRadius: size / 1.6)
+                            .fill(
+                                isSelected ? AnyShapeStyle(Color.accentColor.secondary) : AnyShapeStyle(Material.regularMaterial)
+                            )
+                            .stroke(.separator, lineWidth: 0.5)
+                    } else {
+                        RoundedRectangle(cornerRadius: size / 1.6)
+                            .fill(
+                                isSelected ? AnyShapeStyle(Color.accentColor.opacity(0.3)) : AnyShapeStyle(Material.regularMaterial)
+                            )
+                        RoundedRectangle(cornerRadius: size / 1.6)
+                            .stroke(.secondary, lineWidth: 0.5)
                     }
-                    .watch(value: toolState.activatedTool) { newValue in
-                        if let newValue, secondaryPickerItems.contains(newValue) {
-                            lastActivatedSecondaryTool = newValue
-                        }
+                }
+                .watch(value: toolState.activatedTool) { newValue in
+                    if let newValue, secondaryPickerItems.contains(newValue) {
+                        lastActivatedSecondaryTool = newValue
                     }
+                }
             }
         }
         .padding(.horizontal, {
@@ -279,16 +290,28 @@ struct ExcalidrawToolbar: View {
     @ViewBuilder
     private func secondaryPickerItemsMenu(
         tool: ExcalidrawTool,
+        secondaryPickerItems: [ExcalidrawTool],
         size: CGFloat = 20,
     ) -> some View {
+#if os(iOS)
         Menu {
-            Picker(selection: $toolState.activatedTool) {
-                ForEach(secondaryPickerItems, id: \.self) { tool in
-                    densePickerItems(tool: tool)
-                        .tag(tool)
-                }
-            } label: { }
-                .pickerStyle(.inline)
+            secondaryPickerItemsPicker(secondaryPickerItems)
+        } label: {
+            secondaryPickerItemsMenuLabel(
+                secondaryPickerItems: secondaryPickerItems,
+                size: size
+            )
+            .foregroundStyle(
+                toolState.activatedTool != nil && secondaryPickerItems.contains(toolState.activatedTool!)
+                ? AnyShapeStyle(Color.accentColor)
+                : AnyShapeStyle(HierarchicalShapeStyle.primary)
+            )
+            .contentShape(Rectangle())
+        }
+        .menuIndicator(.hidden)
+#else
+        Menu {
+            secondaryPickerItemsPicker(secondaryPickerItems)
         } label: {
             SegmentedToolPickerItemView(
                 tool: {
@@ -315,22 +338,65 @@ struct ExcalidrawToolbar: View {
             }
         }
         .menuIndicator(.visible)
+#endif
     }
     
-    @State private var primaryPickerItems: [ExcalidrawTool] = []
-    @State private var secondaryPickerItems: [ExcalidrawTool] = []
+    @ViewBuilder
+    private func secondaryPickerItemsPicker(_ secondaryPickerItems: [ExcalidrawTool]) -> some View {
+        Picker(selection: $toolState.activatedTool) {
+            ForEach(secondaryPickerItems, id: \.self) { tool in
+                densePickerItems(tool: tool)
+                    .tag(tool)
+            }
+        } label: { }
+            .pickerStyle(.inline)
+    }
     
     @ViewBuilder
-    private func primaryToolPikcerItems(size: CGFloat, withFooter: Bool) -> some View {
-        ForEach(primaryPickerItems, id: \.self) { tool in
-            toolPickerItemView(tool: tool, size: size, withFooter: withFooter)
-                .tag(tool)
+    private func denseContent() -> some View {
+        HStack {
+            Picker(selection: $toolState.activatedTool) {
+                ForEach(ExcalidrawTool.allCases, id: \.self) { tool in
+                    densePickerItems(tool: tool)
+                        .tag(tool)
+                }
+            } label: {
+                Text(.localizable(.toolbarActiveToolTitle))
+            }
+            .pickerStyle(.menu)
+            .fixedSize()
+        }
+    }
+
+    @ViewBuilder
+    private func secondaryPickerItemsMenuLabel(
+        secondaryPickerItems: [ExcalidrawTool],
+        size: CGFloat
+    ) -> some View {
+        if let tool = toolState.activatedTool,
+           secondaryPickerItems.contains(tool) {
+            SegmentedToolPickerItemView(
+                tool: tool,
+                size: size,
+                withFooter: false
+            )
+        } else {
+            Image(systemSymbol: .line3Horizontal)
+                .modifier(
+                    ExcalidrawToolbarItemModifer(size: size, labelType: .image) {
+                        EmptyView()
+                    }
+                )
         }
     }
     
     @ViewBuilder
-    private func secondaryToolPikcerItems(size: CGFloat, withFooter: Bool) -> some View {
-        ForEach(secondaryPickerItems, id: \.self) { tool in
+    private func primaryToolPikcerItems(
+        _ primaryPickerItems: [ExcalidrawTool],
+        size: CGFloat,
+        withFooter: Bool
+    ) -> some View {
+        ForEach(primaryPickerItems, id: \.self) { tool in
             toolPickerItemView(tool: tool, size: size, withFooter: withFooter)
                 .tag(tool)
         }
@@ -355,46 +421,7 @@ struct ExcalidrawToolbar: View {
     @ViewBuilder
     private func compactContent() -> some View {
         if toolState.inDragMode {
-            HStack(spacing: 20) {
-                Color.clear
-                    .overlay(alignment: .leading) {
-#if os(iOS)
-                        if let activeFile = fileState.currentActiveFile {
-                            FileICloudSyncStatusIndicator(file: activeFile)
-                                .padding(.horizontal, 8)
-                        } else if case .collaborationFile = fileState.currentActiveFile {
-                            CollaborationMembersPopoverButton()
-                        }
-#endif
-                    }
-                Color.clear
-                    .overlay(alignment: .center) {
-#if os(iOS)
-                        FileStatusProvider(file: fileState.currentActiveFile) { status in
-                            Text(
-                                status?.iCloudStatus == .syncing
-                                ? .localizable(.iCloudStatusSyncing)
-                                : .localizable(.toolbarViewMode)
-                            )
-                            .animation(.smooth, value: status?.iCloudStatus == .syncing)
-                        }
-#endif
-                    }
-                    .frame(minWidth: 220) // for iPad
-                Color.clear
-                    .overlay(alignment: .trailing) {
-                        Button {
-                            if case .file(let file) = fileState.currentActiveFile, file.inTrash {
-                                layoutState.isResotreAlertIsPresented.toggle()
-                            } else {
-                                toolState.setActivedTool(.cursor)
-                            }
-                        } label: {
-                            Text(.localizable(.toolbarEdit))
-                        }
-                        .tint(Color.accentColor)
-                    }
-            }
+            compactDragModeControls
         } else if let activatedTool = toolState.activatedTool, activatedTool != .cursor {
             if containerHorizontalSizeClass == .compact {
                 Text(activatedTool.localization).frame(maxWidth: .infinity, alignment: .leading).padding(.leading, 6)
@@ -542,18 +569,192 @@ struct ExcalidrawToolbar: View {
     }
     
     @ViewBuilder
-    private func denseContent() -> some View {
-        HStack {
-            Picker(selection: $toolState.activatedTool) {
-                ForEach(ExcalidrawTool.allCases, id: \.self) { tool in
-                    densePickerItems(tool: tool)
-                        .tag(tool)
-                }
-            } label: {
-                Text(.localizable(.toolbarActiveToolTitle))
+    private var compactDragModeControls: some View {
+        compactStatusBar
+        
+        Spacer(minLength: 0)
+        
+        compactInspectorTabButton(
+            tab: .preference,
+            icon: .sliderHorizontal3,
+            title: String(localizable: .canvasPreferencesTitle)
+        )
+        if shouldCollapseCompactInspectorTabs {
+            compactInspectorTabButton(
+                tab: .aiChat,
+                icon: .sparkles,
+                title: "AI Chat",
+                action: toggleCompactAIChatPresentation
+            )
+            compactInspectorTabsMenu()
+        } else {
+            compactInspectorTabButton(
+                tab: .search,
+                icon: .magnifyingglass,
+                title: String(localizable: .searchButtonTitle)
+            )
+            .keyboardShortcut("f", modifiers: .command)
+            compactInspectorTabButton(
+                tab: .library,
+                icon: .book,
+                title: String(localizable: .librariesTitle)
+            )
+            compactInspectorTabButton(
+                tab: .history,
+                icon: .clockArrowCirclepath,
+                title: String(localizable: .checkpoints)
+            )
+            compactInspectorTabButton(
+                tab: .aiChat,
+                icon: .sparkles,
+                title: "AI Chat",
+                action: toggleCompactAIChatPresentation
+            )
+        }
+        compactEditButton
+    }
+    
+    @ViewBuilder
+    private var compactStatusBar: some View {
+#if os(iOS)
+        if let activeFile = fileState.currentActiveFile {
+            FileICloudSyncStatusIndicator(file: activeFile)
+                .frame(width: 28, height: 28)
+        }
+#endif
+    }
+    
+    private var shouldCollapseCompactInspectorTabs: Bool {
+#if os(iOS)
+        guard containerHorizontalSizeClass == .compact else { return false }
+        return UIScreen.main.bounds.width < 390
+#else
+        return false
+#endif
+    }
+    
+    @ViewBuilder
+    private var compactEditButton: some View {
+        Button {
+            if case .file(let file) = fileState.currentActiveFile, file.inTrash {
+                layoutState.isResotreAlertIsPresented.toggle()
+            } else {
+                toolState.setActivedTool(.cursor)
             }
-            .pickerStyle(.menu)
-            .fixedSize()
+        } label: {
+            Label(.localizable(.toolbarEdit), systemSymbol: .pencil)
+                .labelStyle(.iconOnly)
+                .frame(width: 28, height: 28)
+        }
+        .modernButtonStyle(style: .glassProminent, size: .small, shape: .circle)
+        .help(String(localizable: .toolbarEdit))
+    }
+    
+    @ViewBuilder
+    private func compactInspectorTabButton(
+        tab: LayoutState.InspectorTab,
+        icon: SFSymbol,
+        title: String,
+        action: (() -> Void)? = nil
+    ) -> some View {
+        let isDisabled = compactInspectorTabIsDisabled(tab)
+        let isActive = compactInspectorTabIsActive(tab)
+        
+        Button {
+            guard !isDisabled else { return }
+            if let action {
+                action()
+            } else {
+                layoutState.toggleInspector(tab)
+            }
+        } label: {
+            Label(title, systemSymbol: icon)
+                .labelStyle(.iconOnly)
+                .font(.system(size: 16))
+                .foregroundStyle(isActive ? Color.accentColor : Color.primary)
+                .frame(width: 28, height: 28)
+        }
+        .help(title)
+        .opacity(isDisabled && !isActive ? 0.55 : 1)
+        .allowsHitTesting(!isDisabled)
+    }
+    
+    @ViewBuilder
+    private func compactInspectorTabsMenu() -> some View {
+        Menu {
+            compactInspectorTabMenuButton(
+                tab: .search,
+                icon: .magnifyingglass,
+                title: String(localizable: .searchButtonTitle)
+            )
+            .keyboardShortcut("f", modifiers: .command)
+            compactInspectorTabMenuButton(
+                tab: .history,
+                icon: .clockArrowCirclepath,
+                title: String(localizable: .checkpoints)
+            )
+            compactInspectorTabMenuButton(
+                tab: .library,
+                icon: .book,
+                title: String(localizable: .librariesTitle)
+            )
+        } label: {
+            Label(.localizable(.generalButtonMore), systemSymbol: .ellipsis)
+                .labelStyle(.iconOnly)
+                .font(.system(size: 16))
+                .foregroundStyle(compactCollapsedInspectorTabsContainActive ? Color.accentColor : Color.primary)
+                .frame(width: 28, height: 28)
+        }
+        .menuIndicator(.hidden)
+        .help(String(localizable: .generalButtonMore))
+#if os(iOS)
+        .menuOrder(.fixed)
+#endif
+    }
+    
+    @ViewBuilder
+    private func compactInspectorTabMenuButton(
+        tab: LayoutState.InspectorTab,
+        icon: SFSymbol,
+        title: String
+    ) -> some View {
+        let isDisabled = compactInspectorTabIsDisabled(tab)
+        Button {
+            guard !isDisabled else { return }
+            layoutState.toggleInspector(tab)
+        } label: {
+            Label(title, systemSymbol: icon)
+        }
+        .disabled(isDisabled)
+    }
+    
+    private var compactCollapsedInspectorTabsContainActive: Bool {
+        [LayoutState.InspectorTab.search, .history, .library].contains { tab in
+            compactInspectorTabIsActive(tab)
+        }
+    }
+    
+    private func compactInspectorTabIsDisabled(_ tab: LayoutState.InspectorTab) -> Bool {
+        switch tab {
+            case .history:
+                return fileState.currentActiveFile == nil
+            default:
+                return false
+        }
+    }
+    
+    private func compactInspectorTabIsActive(_ tab: LayoutState.InspectorTab) -> Bool {
+        if tab == .aiChat, layoutState.isAIChatIslandMode {
+            return true
+        }
+        return layoutState.isInspectorPresented && layoutState.activeInspectorTab == tab
+    }
+    
+    private func toggleCompactAIChatPresentation() {
+        if layoutState.isAIChatIslandMode {
+            layoutState.isAIChatIslandMode = false
+        } else {
+            layoutState.toggleInspector(.aiChat)
         }
     }
     
@@ -583,156 +784,167 @@ struct ExcalidrawToolbar: View {
     
     @ViewBuilder
     private func moreTools() -> some View {
-        Menu {
-#if DEBUG
-#if !os(iOS)
-            Button {
-                Task {
-                    try? await toolState.excalidrawWebCoordinator?.toggleToolbarAction(tool: .text2Diagram)
-                }
-            } label: {
-                Text(.localizable(.toolbarText2Diagram))
-            }
-#endif
-#endif
-            Button {
-                isMermaidInputSheetPresented.toggle()
-            } label: {
-                Text(.localizable(.toolbarMermaid))
-            }
-            
-            Button {
-                isMathInputSheetPresented.toggle()
-            } label: {
-                Text(.localizable(.toolbarLatexMath))
-            }
-            
-            Button {
-                isPDFPickerPresented.toggle()
-            } label: {
-                Text(localizable: .toolbarInsertPDF)
-            }
-        } label: {
-            if #available(macOS 15.0, iOS 18.0, *) {
-                Label(.localizable(.toolbarMoreTools), systemImage: "xmark.triangle.circle.square")
-            } else if #available(macOS 13.0, iOS 16.0, *) {
-                Label(.localizable(.toolbarMoreTools), systemSymbol: .chartXyaxisLine)
-            } else {
-                Label(.localizable(.toolbarMoreTools), systemSymbol: .chartXyaxisLine)
-            }
-        }
-        .menuIndicator(.hidden)
-#if os(iOS)
-        .menuOrder(.fixed)
-#endif
-        .modifier(MermaidInputSheetViewModifier(isPresented: $isMermaidInputSheetPresented))
-        .modifier(MathInputSheetViewModifier(isPresented: $isMathInputSheetPresented))
-        .modifier(PDFInsertSheetViewModifier(isPresented: $isPDFPickerPresented))
+        ExcalidrawToolbarMoreToolsMenu()
     }
 }
 
-enum ExcalidrawToolbarToolSizeClass {
-    case dense
-    case compact
-    case regular
-    case expanded
+#if os(iOS)
+private enum ExcalidrawToolbarSurfaceShape {
+    case circle
+    case capsule
+    
+    var horizontalPadding: CGFloat {
+        switch self {
+            case .circle:
+                6
+            case .capsule:
+                6
+        }
+    }
+    
+    var verticalPadding: CGFloat {
+        switch self {
+            case .circle:
+                6
+            case .capsule:
+                2
+        }
+    }
 }
 
+private struct ExcalidrawToolbarSurfaceModifier: ViewModifier {
+    @Environment(\.colorScheme) private var colorScheme
+    
+    let shape: ExcalidrawToolbarSurfaceShape
+    
+    func body(content: Content) -> some View {
+        content
+            .padding(.horizontal, shape.horizontalPadding)
+            .padding(.vertical, shape.verticalPadding)
+            .background {
+                surfaceBackground
+            }
+            .compositingGroup()
+            .shadow(
+                color: shadowColor,
+                radius: shadowRadius,
+                x: 0,
+                y: shadowYOffset
+            )
+    }
+    
+    @ViewBuilder
+    private var surfaceBackground: some View {
+        switch shape {
+            case .circle:
+                if #available(iOS 26.0, *) {
+                    Circle()
+                        .fill(.clear)
+                        .glassEffect(.clear, in: Circle())
+                } else {
+                    Circle()
+                        .fill(.regularMaterial)
+                }
+            case .capsule:
+                if #available(iOS 26.0, *) {
+                    Capsule()
+                        .fill(.clear)
+                        .glassEffect(.clear, in: Capsule())
+                } else {
+                    Capsule()
+                        .fill(.regularMaterial)
+                }
+        }
+    }
+    
+    private var shadowColor: Color {
+        guard #available(iOS 26.0, *),
+              colorScheme == .light else {
+            return .clear
+        }
+        return .black.opacity(0.08)
+    }
+    
+    private var shadowRadius: CGFloat {
+        guard #available(iOS 26.0, *),
+              colorScheme == .light else {
+            return 0
+        }
+        return 10
+    }
+    
+    private var shadowYOffset: CGFloat {
+        guard #available(iOS 26.0, *),
+              colorScheme == .light else {
+            return 0
+        }
+        return 4
+    }
+}
+
+private extension View {
+    func excalidrawToolbarSurface(_ shape: ExcalidrawToolbarSurfaceShape) -> some View {
+        modifier(ExcalidrawToolbarSurfaceModifier(shape: shape))
+    }
+}
+#endif
+
 struct ExcalidrawToolbarToolContainer<Content: View>: View {
+    @Environment(\.containerSize) private var containerSize
     @EnvironmentObject private var layoutState: LayoutState
     @EnvironmentObject private var fileState: FileState
-    
+
     var content: (_ size: ExcalidrawToolbarToolSizeClass) -> Content
-    
+
     init(
         @ViewBuilder content: @escaping (_ size: ExcalidrawToolbarToolSizeClass) -> Content
     ) {
         self.content = content
     }
-    
+
     @State private var sizeClass: ExcalidrawToolbarToolSizeClass = .dense
-    
+
     var body: some View {
         content(sizeClass)
-            .background {
-                WithContainerSize { containerSize in
-                    Color.clear
-                        .watch(value: containerSize) { _, newValue in
-                            let newSizeClass = getSizeClass(containerSize.width)
-                            if newSizeClass != sizeClass {
-                                self.sizeClass = newSizeClass
-                            }
-                        }
-                        .watch(value: layoutState.isInspectorPresented) { _ in
-                            DispatchQueue.main.async {
-                                self.sizeClass = getSizeClass(containerSize.width)
-                            }
-                        }
-                        .watch(value: layoutState.isSidebarPresented) { _ in
-                            DispatchQueue.main.async {
-                                self.sizeClass = getSizeClass(containerSize.width)
-                            }
-                        }
+            .watch(value: containerSize, initial: true) { _, newValue in
+                syncSizeClass(width: newValue.width)
+            }
+            .watch(value: layoutState.isInspectorPresented) { _ in
+                DispatchQueue.main.async {
+                    syncSizeClass(width: containerSize.width)
+                }
+            }
+            .watch(value: layoutState.isSidebarPresented) { _ in
+                DispatchQueue.main.async {
+                    syncSizeClass(width: containerSize.width)
+                }
+            }
+            .watch(value: fileState.currentActiveFile?.id) { _ in
+                DispatchQueue.main.async {
+                    syncSizeClass(width: containerSize.width)
                 }
             }
     }
-    
+
+    private func syncSizeClass(width: CGFloat) {
+        guard width > 0 else { return }
+        let newSizeClass = getSizeClass(width)
+        guard newSizeClass != sizeClass else { return }
+        sizeClass = newSizeClass
+    }
+
     private func getSizeClass(_ width: CGFloat) -> ExcalidrawToolbarToolSizeClass {
-        let collaborationExtraWidth: CGFloat = 90 // Collaborators
-        
-        let width: CGFloat = if case .collaborationFile = fileState.currentActiveFile {
-            width - collaborationExtraWidth
-        } else {
-            width
-        }
-        
-        if #available(macOS 13.0, *) {
-            if layoutState.isInspectorPresented,
-               layoutState.isSidebarPresented {
-                switch width {
-                    case ..<1660:
-                        return .dense
-                    case ..<1830:
-                        return .compact
-                    case ..<1980:
-                        return .regular
-                    default:
-                        return .expanded
+        ExcalidrawToolbarLayoutPolicy.toolSizeClass(
+            for: width,
+            isSidebarPresented: layoutState.isSidebarPresented,
+            isInspectorPresented: layoutState.isInspectorPresented,
+            isCollaborationFile: {
+                if case .collaborationFile = fileState.currentActiveFile {
+                    return true
                 }
-            } else if layoutState.isSidebarPresented {
-                switch width {
-                    case ..<1330:
-                        return .dense
-                    case ..<1480:
-                        return .compact
-                    case ..<1680:
-                        return .regular
-                    default:
-                        return .expanded
-                }
-            } else if layoutState.isInspectorPresented {
-                switch width {
-                    case ..<1510:
-                        return .dense
-                    case ..<1680:
-                        return .compact
-                    case ..<1860:
-                        return .regular
-                    default:
-                        return .expanded
-                }
-            }
-        }
-        switch width {
-            case ..<1170:
-                return .dense
-            case ..<1330:
-                return .compact
-            case ..<1510:
-                return .regular
-            default:
-                return .expanded
-        }
+                return false
+            }()
+        )
     }
 }
 
@@ -826,16 +1038,16 @@ struct ExcalidrawToolbarItemModifer: ViewModifier {
     }
 }
 
-private struct CursorModeTrailingButton: View {
+struct CursorModeTrailingButton: View {
     @Environment(\.alertToast) private var alertToast
-
+    
     @ObservedObject var coordinator: ExcalidrawCanvasView.Coordinator
     var onDone: () -> Void
-
+    
     private var hasSelection: Bool {
         !coordinator.selectedElementIDs.isEmpty
     }
-
+    
     var body: some View {
         Button(role: hasSelection ? .destructive : nil) {
             if hasSelection {
@@ -855,7 +1067,7 @@ private struct CursorModeTrailingButton: View {
         .contentTransition(.opacity)
         .animation(.smooth, value: hasSelection)
     }
-
+    
     private func deleteSelectedElements() {
         Task { @MainActor in
             do {

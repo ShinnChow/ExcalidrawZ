@@ -15,24 +15,7 @@ extension AISettingsView {
     var usageHeader: some View {
         VStack(alignment: .leading, spacing: 22) {
             settingsTabHeader {
-                HStack(alignment: .center, spacing: 16) {
-                    usageGauge
-
-                    VStack(alignment: .leading, spacing: 8) {
-                        HStack(spacing: 8) {
-                            Text(localizable: .aiChatUsageTitle)
-                                .font(.title2.weight(.semibold))
-                                .foregroundStyle(.primary)
-
-                            planBadge
-                        }
-
-                        Text(planSubtitle)
-                            .font(.callout)
-                            .foregroundStyle(.secondary)
-                            .lineLimit(2)
-                    }
-                }
+                usageSummary
             } accessory: {
                 Button {
                     store.togglePaywall(reason: .aiInsufficientCredits)
@@ -49,45 +32,125 @@ extension AISettingsView {
     }
 
     @ViewBuilder
-    var activityHeader: some View {
-        HStack(alignment: .center) {
-            Label(.localizable(.settingsAIUsageActivityTitle), systemSymbol: .chartLineUptrendXyaxis)
-                .font(.headline)
-                .foregroundStyle(.primary)
-
-            Spacer()
-
-            if !transactions.isEmpty || !allTransactions.isEmpty {
-                if #available(macOS 14.0, *) {
-                    Picker(
-                        .localizable(.settingsAIUsageActivityGroupingTitle),
-                        selection: $activityGrouping
-                    ) {
-                        ForEach(ActivityGrouping.allCases) { grouping in
-                            Text(grouping.title).tag(grouping)
-                        }
-                    }
-                    .pickerStyle(.segmented)
-                    .labelsHidden()
-                    .frame(width: 144)
-                    .buttonBorderShape(.capsule)
-                    .containerShape(.capsule)
-                } else {
-                    Picker(
-                        .localizable(.settingsAIUsageActivityGroupingTitle),
-                        selection: $activityGrouping
-                    ) {
-                        ForEach(ActivityGrouping.allCases) { grouping in
-                            Text(grouping.title).tag(grouping)
-                        }
-                    }
-                    .pickerStyle(.segmented)
-                    .labelsHidden()
-                    .frame(width: 144)
-                }
-            } else if totalTransactionCount > 0 {
-                transactionCountLabel
+    var usageSummary: some View {
+        if usesCompactSettingsLayout {
+            VStack(alignment: .leading, spacing: 12) {
+                usageGauge
+                usagePlanText
             }
+        } else {
+            ViewThatFits(in: .horizontal) {
+                HStack(alignment: .center, spacing: 16) {
+                    usageGauge
+                    usagePlanText
+                }
+                .fixedSize(horizontal: true, vertical: false)
+
+                VStack(alignment: .leading, spacing: 12) {
+                    usageGauge
+                    usagePlanText
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
+    @ViewBuilder
+    var usagePlanText: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 8) {
+                    Text(localizable: .aiChatUsageTitle)
+                        .font(.title2.weight(.semibold))
+                        .foregroundStyle(.primary)
+
+                    planBadge
+                }
+
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(localizable: .aiChatUsageTitle)
+                        .font(.title2.weight(.semibold))
+                        .foregroundStyle(.primary)
+
+                    planBadge
+                }
+            }
+
+            Text(planSubtitle)
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .lineLimit(3)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    @ViewBuilder
+    var activityHeader: some View {
+        if usesCompactSettingsLayout {
+            VStack(alignment: .leading, spacing: 10) {
+                Label(.localizable(.settingsAIUsageActivityTitle), systemSymbol: .chartLineUptrendXyaxis)
+                    .font(.headline)
+                    .foregroundStyle(.primary)
+
+                activityGroupingControl
+            }
+        } else {
+            ViewThatFits(in: .horizontal) {
+                HStack(alignment: .center) {
+                    Label(.localizable(.settingsAIUsageActivityTitle), systemSymbol: .chartLineUptrendXyaxis)
+                        .font(.headline)
+                        .foregroundStyle(.primary)
+
+                    Spacer(minLength: 16)
+
+                    activityGroupingControl
+                }
+                .fixedSize(horizontal: true, vertical: false)
+
+                VStack(alignment: .leading, spacing: 10) {
+                    Label(.localizable(.settingsAIUsageActivityTitle), systemSymbol: .chartLineUptrendXyaxis)
+                        .font(.headline)
+                        .foregroundStyle(.primary)
+
+                    activityGroupingControl
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
+    @ViewBuilder
+    var activityGroupingControl: some View {
+        if !transactions.isEmpty || !allTransactions.isEmpty {
+            if #available(macOS 14.0, *) {
+                Picker(
+                    .localizable(.settingsAIUsageActivityGroupingTitle),
+                    selection: $activityGrouping
+                ) {
+                    ForEach(ActivityGrouping.allCases) { grouping in
+                        Text(grouping.title).tag(grouping)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                .frame(width: 144)
+                .buttonBorderShape(.capsule)
+                .containerShape(.capsule)
+            } else {
+                Picker(
+                    .localizable(.settingsAIUsageActivityGroupingTitle),
+                    selection: $activityGrouping
+                ) {
+                    ForEach(ActivityGrouping.allCases) { grouping in
+                        Text(grouping.title).tag(grouping)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                .frame(width: 144)
+            }
+        } else if totalTransactionCount > 0 {
+            transactionCountLabel
         }
     }
 
@@ -103,6 +166,7 @@ extension AISettingsView {
                     Text(localizable: .settingsAISubtitle)
                         .font(.callout)
                         .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
             }
         }
@@ -117,7 +181,10 @@ extension AISettingsView {
             percentageText: metrics.fractionRemaining.formatted(.percent.precision(.fractionLength(0))),
             detailText: String(localizable: .settingsAIUsageRemainingText(formatCredits(metrics.remaining)))
         )
-        .frame(width: 176, height: 106)
+        .frame(
+            width: usesCompactSettingsLayout ? 156 : 176,
+            height: usesCompactSettingsLayout ? 96 : 106
+        )
     }
 
     @ViewBuilder

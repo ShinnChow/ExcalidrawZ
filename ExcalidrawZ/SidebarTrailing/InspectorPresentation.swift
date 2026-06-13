@@ -13,6 +13,30 @@ import ChocofordEssentials
 import ChocofordUI
 import UniformTypeIdentifiers
 
+enum FloatingInspectorMetrics {
+    static let widthStorageKey = "ExcalidrawFloatingInspectorWidth"
+    static let defaultWidth: Double = 300
+    static let minWidth: CGFloat = 260
+    static let maxWidth: CGFloat = 440
+#if os(iOS)
+    static let horizontalPadding: CGFloat = 8
+    static let controlsGap: CGFloat = 10
+    static let controlsTopPadding: CGFloat = 6
+#else
+    static let horizontalPadding: CGFloat = 10
+    static let controlsGap: CGFloat = 18
+    static let controlsTopPadding: CGFloat = 16
+#endif
+
+    static func clampedWidth(_ width: CGFloat) -> CGFloat {
+        min(max(width, minWidth), maxWidth)
+    }
+
+    static func controlsInset(for width: CGFloat) -> CGFloat {
+        clampedWidth(width) + controlsGap
+    }
+}
+
 struct InspectorPresentationModifier: ViewModifier {
     @Environment(\.containerHorizontalSizeClass) private var containerHorizontalSizeClass
 
@@ -21,6 +45,7 @@ struct InspectorPresentationModifier: ViewModifier {
     @EnvironmentObject private var fileState: FileState
     @EnvironmentObject private var lockedContentState: LockedContentStateStore
 
+    @AppStorage(FloatingInspectorMetrics.widthStorageKey) private var floatingInspectorWidth = FloatingInspectorMetrics.defaultWidth
     @State private var librariesToImport: [ExcalidrawLibrary] = []
 
     var shouldUseFloatingInspector: Bool {
@@ -52,6 +77,30 @@ struct InspectorPresentationModifier: ViewModifier {
         !fileState.activeCollaborationFileIsLoading
     }
 
+    private var isCompactIOS: Bool {
+#if os(iOS)
+        containerHorizontalSizeClass == .compact
+#else
+        false
+#endif
+    }
+
+    private var floatingInspectorTopPadding: CGFloat {
+#if os(iOS)
+        58
+#else
+        10
+#endif
+    }
+
+    private var floatingInspectorHorizontalPadding: CGFloat {
+        FloatingInspectorMetrics.horizontalPadding
+    }
+
+    private var resolvedFloatingInspectorWidth: CGFloat {
+        FloatingInspectorMetrics.clampedWidth(CGFloat(floatingInspectorWidth))
+    }
+
     func body(content: Content) -> some View {
         ZStack {
             if shouldUseFloatingInspector {
@@ -59,8 +108,7 @@ struct InspectorPresentationModifier: ViewModifier {
             } else if containerHorizontalSizeClass == .compact {
                 content
                     .sheet(isPresented: $layoutState.isInspectorPresented) {
-                        inspectorContent()
-                            .disabled(shouldDisableInspectorContent)
+                        compactInspectorContent()
                     }
             } else if #available(macOS 14.0, iOS 17.0, *) {
                 content
@@ -115,6 +163,30 @@ struct InspectorPresentationModifier: ViewModifier {
         }
     }
 
+    @ViewBuilder
+    private func compactInspectorContent() -> some View {
+        if isCompactIOS {
+            switch layoutState.activeInspectorTab {
+                case .preference, .search:
+                    CompactInspectorNavigationSheet(
+                        title: inspectorTitle,
+                        onDismiss: {
+                            layoutState.isInspectorPresented = false
+                        }
+                    ) {
+                        inspectorContent()
+                            .disabled(shouldDisableInspectorContent)
+                    }
+                default:
+                    inspectorContent()
+                        .disabled(shouldDisableInspectorContent)
+            }
+        } else {
+            inspectorContent()
+                .disabled(shouldDisableInspectorContent)
+        }
+    }
+
     private var inspectorTitle: String {
         switch layoutState.activeInspectorTab {
             case .aiChat:
@@ -141,28 +213,44 @@ struct InspectorPresentationModifier: ViewModifier {
             HStack {
                 Spacer()
                 if shouldShowInspectorPresentation {
-                    VStack {
-                        Text(inspectorTitle)
-                            .foregroundStyle(.secondary)
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, 10)
-                            .padding(.horizontal, 4)
-
-                        inspectorContent()
-                            .disabled(shouldDisableInspectorContent)
+                    ZStack {
+                        if isCompactIOS {
+                            floatingInspectorPanelContent()
+                                .frame(minWidth: 240, idealWidth: 250, maxWidth: 300)
+                        } else {
+                            floatingInspectorPanelContent()
+                                .frame(width: resolvedFloatingInspectorWidth)
+                                .overlay(alignment: .leading) {
+                                    FloatingInspectorResizeHandle(width: $floatingInspectorWidth)
+                                        .offset(x: -6)
+                                }
+                        }
                     }
-                    .frame(minWidth: 240, idealWidth: 250, maxWidth: 300)
-                    .clipShape(RoundedRectangle(cornerRadius: 12))
+                    .clipShape(
+                        RoundedRectangle(
+                            cornerRadius: floatingInspectorCornerRadius,
+                            style: .continuous
+                        )
+                    )
                     .background {
                         if #available(iOS 26.0, macOS 26.0, *) {
-                            RoundedRectangle(cornerRadius: 24)
+                            RoundedRectangle(
+                                cornerRadius: floatingInspectorCornerRadius,
+                                style: .continuous
+                            )
                                 .fill(.background)
-                                .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 24))
+                                .glassEffect(
+                                    .regular,
+                                    in: RoundedRectangle(
+                                        cornerRadius: floatingInspectorCornerRadius,
+                                        style: .continuous
+                                    )
+                                )
 #if os(macOS)
                                 .shadow(radius: 4)
 #endif
                         } else {
-                            RoundedRectangle(cornerRadius: 12)
+                            RoundedRectangle(cornerRadius: 12, style: .continuous)
                                 .fill(.regularMaterial)
                                 .shadow(radius: 4)
                         }
@@ -171,26 +259,193 @@ struct InspectorPresentationModifier: ViewModifier {
                 }
             }
             .animation(.easeOut, value: shouldShowInspectorPresentation)
+            .padding(.top, floatingInspectorTopPadding)
 #if os(macOS)
-            .padding(.top, 10)
             .padding(.bottom, 40)
 #else
             .padding(.bottom, 10)
 #endif
-            .padding(.horizontal, 10)
+            .padding(.horizontal, floatingInspectorHorizontalPadding)
             .ignoresSafeArea(edges: .bottom)
         }
         .overlay(alignment: .topTrailing) {
+#if os(macOS)
             if shouldShowInspectorPresentation {
                 ExcalidrawTrailingControls()
                     .transition(.opacity)
             }
+#endif
         }
         .animation(.easeOut, value: shouldShowInspectorPresentation)
     }
+
+    private var floatingInspectorCornerRadius: CGFloat {
+        if #available(iOS 26.0, macOS 26.0, *) {
+            24
+        } else {
+            12
+        }
+    }
+
+    @ViewBuilder
+    private func floatingInspectorPanelContent() -> some View {
+        if shouldUseFloatingNavigationInspectorContent {
+            floatingNavigationInspectorContent()
+        } else if floatingInspectorContentHasOwnTitle {
+            inspectorContent()
+                .disabled(shouldDisableInspectorContent)
+        } else {
+            VStack(spacing: 0) {
+                floatingInspectorTitle()
+
+                inspectorContent()
+                    .disabled(shouldDisableInspectorContent)
+            }
+        }
+    }
+
+    private var shouldUseFloatingNavigationInspectorContent: Bool {
+        switch layoutState.activeInspectorTab {
+            case .aiChat, .library:
+                true
+            case .history:
+                !isCompactIOS
+            default:
+                false
+        }
+    }
+
+    @ViewBuilder
+    private func floatingNavigationInspectorContent() -> some View {
+        NavigationStack {
+            inspectorContent()
+                .disabled(shouldDisableInspectorContent)
+                .navigationTitle(inspectorTitle)
+#if canImport(UIKit)
+                .navigationBarTitleDisplayMode(.inline)
+#endif
+        }
+    }
+
+    private var floatingInspectorContentHasOwnTitle: Bool {
+#if os(iOS)
+        layoutState.activeInspectorTab == .history && isCompactIOS
+#else
+        false
+#endif
+    }
+
+    @ViewBuilder
+    private func floatingInspectorTitle() -> some View {
+#if os(iOS)
+        if #available(iOS 26.0, *),
+           layoutState.activeInspectorTab == .aiChat {
+            InspectorToolbarTitleLabel(title: inspectorTitle)
+                .frame(maxWidth: .infinity)
+                .padding(.top, 8)
+                .padding(.bottom, 7)
+                .padding(.horizontal, 10)
+        } else {
+            defaultFloatingInspectorTitle()
+        }
+#else
+        defaultFloatingInspectorTitle()
+#endif
+    }
+
+    @ViewBuilder
+    private func defaultFloatingInspectorTitle() -> some View {
+        Text(inspectorTitle)
+            .foregroundStyle(.secondary)
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 10)
+            .padding(.horizontal, 4)
+    }
 }
 
-#if os(macOS)
+struct InspectorToolbarTitleLabel: View {
+    let title: String
+
+    var body: some View {
+        Text(title)
+            .foregroundStyle(.secondary)
+            .font(.headline)
+    }
+}
+
+private struct FloatingInspectorResizeHandle: View {
+    @Binding var width: Double
+
+    @State private var dragStartWidth: CGFloat?
+    @State private var isDragging = false
+
+    var body: some View {
+        ZStack {
+            Color.clear
+                .frame(width: 30)
+
+            Capsule()
+                .fill(Color.secondary.opacity(isDragging ? 0.42 : 0.22))
+                .frame(width: 6, height: 34)
+        }
+        .contentShape(Rectangle())
+        .hoverCursor(.columnResize(directions: .both))
+        .gesture(
+            DragGesture(minimumDistance: 0, coordinateSpace: .global)
+                .onChanged { value in
+                    if dragStartWidth == nil {
+                        dragStartWidth = CGFloat(width)
+                    }
+                    isDragging = true
+
+                    let startWidth = dragStartWidth ?? CGFloat(width)
+                    let proposedWidth = startWidth - value.translation.width
+                    width = Double(FloatingInspectorMetrics.clampedWidth(proposedWidth))
+                }
+                .onEnded { _ in
+                    dragStartWidth = nil
+                    isDragging = false
+                }
+        )
+    }
+}
+
+private struct CompactInspectorNavigationSheet<Content: View>: View {
+    let title: String
+    let onDismiss: () -> Void
+    private let content: Content
+
+    init(
+        title: String,
+        onDismiss: @escaping () -> Void,
+        @ViewBuilder content: () -> Content
+    ) {
+        self.title = title
+        self.onDismiss = onDismiss
+        self.content = content()
+    }
+
+    var body: some View {
+        NavigationStack {
+            content
+                .navigationTitle(title)
+#if os(iOS)
+                .navigationBarTitleDisplayMode(.inline)
+#endif
+                .toolbar {
+                    ToolbarItem(placement: .confirmationAction) {
+                        Button(action: onDismiss) {
+                            Label(.localizable(.generalButtonDone), systemSymbol: .checkmark)
+                                .labelStyle(.iconOnly)
+                        }
+                        .accessibilityLabel(Text(localizable: .generalButtonDone))
+                    }
+                }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+    }
+}
+
 /// Renders the title that appears at the top of the inspector chrome in sidebar mode.
 /// The placement gymnastics are needed to push the toggle to the right and center the title across macOS versions.
 struct InspectorHeaderToolbar: ToolbarContent {
@@ -199,6 +454,13 @@ struct InspectorHeaderToolbar: ToolbarContent {
     let isInspectorPresented: Bool
     
     var body: some ToolbarContent {
+#if os(iOS)
+        ToolbarItem(placement: .principal) {
+            if isInspectorPresented {
+                InspectorToolbarTitleLabel(title: title)
+            }
+        }
+#else
         /// This is the key to make sidebar toggle at the right side.
         /// The `status` is work well in macOS 15.0+. But not well in macOS 14.0
         ToolbarItemGroup(placement:  .status) {
@@ -206,10 +468,7 @@ struct InspectorHeaderToolbar: ToolbarContent {
                 if #available(macOS 15.0, iOS 18.0, *) {} else {
                     Spacer()
                 }
-                Text(title)
-                    .foregroundStyle(.secondary)
-                    .font(.headline)
-                    .padding(.horizontal, 8)
+                InspectorToolbarTitleLabel(title: title)
                 if #available(macOS 15.0, iOS 18.0, *) {} else {
                     Spacer()
                 }
@@ -220,7 +479,7 @@ struct InspectorHeaderToolbar: ToolbarContent {
                 }
             }
         }
+#endif
         
     }
 }
-#endif

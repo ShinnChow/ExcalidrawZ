@@ -30,6 +30,10 @@ import ChocofordUI
 import LLMKit
 import LLMCore
 
+#if os(iOS)
+import PhotosUI
+#endif
+
 struct ExcalidrawChatInvocationContext: ChatInvocationContext, Sendable {
     var currentFileData: Data?
     var canvasTarget: ExcalidrawCoordinatorRegistry.CanvasTarget
@@ -39,6 +43,7 @@ struct ExcalidrawChatInvocationContext: ChatInvocationContext, Sendable {
     var hasActiveFile: Bool = false
     var currentModelSupportsImageInput: Bool = true
     var isCurrentFileContextProtected: Bool = false
+    var imageAttachments: [AIChatImageAttachmentReference] = []
 }
 
 struct AIChatInvocationPlan: Sendable {
@@ -124,7 +129,9 @@ struct AIChatInvocationPlan: Sendable {
     @MainActor
     func makeContext(
         fileState: FileState,
-        model: SupportedModel
+        model: SupportedModel,
+        supportsImageInput: Bool? = nil,
+        imageAttachments: [AIChatImageAttachmentReference] = []
     ) async throws -> ExcalidrawChatInvocationContext {
         if requiresFreshToolCanvas {
             await AIProposalSandbox.resetCanvasIfAvailable()
@@ -146,8 +153,9 @@ struct AIChatInvocationPlan: Sendable {
             selectedElementIDs: includesCurrentFileContext ? selectedElementIDs : nil,
             currentFileID: includesCurrentFileContext ? currentFileID : nil,
             hasActiveFile: hasActiveFile,
-            currentModelSupportsImageInput: model.supportsExcalidrawImageInput,
-            isCurrentFileContextProtected: isCurrentFileContextProtected
+            currentModelSupportsImageInput: supportsImageInput ?? model.supportsExcalidrawImageInput,
+            isCurrentFileContextProtected: isCurrentFileContextProtected,
+            imageAttachments: imageAttachments
         )
     }
 }
@@ -181,17 +189,29 @@ struct PromptInputView<Background: View, Header: View>: View {
     /// finishes, and clears here on stop.
     @Binding var pendingQueue: [PendingQueueMessage]
     let style: PromptInputStyle<Background>
+    let focusOnAppear: Bool
+    let showsCompactIOSFullChatButton: Bool
+    let dismissKeyboardOnSuccessfulSubmit: Bool
+    let onSuccessfulSubmit: (() -> Void)?
     let header: Header
 
     init(
         conversationID: Binding<String?>,
         pendingQueue: Binding<[PendingQueueMessage]>,
         style: PromptInputStyle<Background>,
+        focusOnAppear: Bool = false,
+        showsCompactIOSFullChatButton: Bool = true,
+        dismissKeyboardOnSuccessfulSubmit: Bool = false,
+        onSuccessfulSubmit: (() -> Void)? = nil,
         @ViewBuilder header: () -> Header
     ) {
         self._conversationID = conversationID
         self._pendingQueue = pendingQueue
         self.style = style
+        self.focusOnAppear = focusOnAppear
+        self.showsCompactIOSFullChatButton = showsCompactIOSFullChatButton
+        self.dismissKeyboardOnSuccessfulSubmit = dismissKeyboardOnSuccessfulSubmit
+        self.onSuccessfulSubmit = onSuccessfulSubmit
         self.header = header()
     }
 
@@ -209,7 +229,7 @@ struct PromptInputView<Background: View, Header: View>: View {
     @State var pendingTierSelection: ExcalidrawModelTier?
 
     /// Global default + per-conversation tier overrides, persisted across
-    /// launches. Drives `activeModel` and reflected back from picker
+    /// launches. Drives the active model profile and reflected back from picker
     /// taps / Settings changes.
     @ObservedObject var prefs = AIChatPreferences.shared
 
@@ -221,6 +241,17 @@ struct PromptInputView<Background: View, Header: View>: View {
     @State var draftHasContent: Bool = false
     @State var draftHasImages: Bool = false
     @State var draftSendRequestToken: Int = 0
+    @State var iOSIslandDraftFieldHeight: CGFloat = 0
+    @State var iOSIslandTextAreaIsSingleLine: Bool = true
+    @State var iOSIslandTextAreaIsOverflowing: Bool = false
+    @State var isIOSIslandFullscreenInputPresented: Bool = false
+#if os(iOS)
+    @EnvironmentObject var layoutState: LayoutState
+    @State var iOSSelectedPhotoPickerItems: [PhotosPickerItem] = []
+    @State var isIOSPhotoLibraryPickerPresented: Bool = false
+    @State var isIOSCameraPickerPresented: Bool = false
+#endif
+    @Namespace var iOSIslandInputNamespace
 #if DEBUG
     @State var debugContextText: String = ""
     @State var debugContextError: String = ""
@@ -269,92 +300,78 @@ struct PromptInputView<Background: View, Header: View>: View {
     /// Picker writes directly into either (1) or (2); (3) is mutated
     /// from Settings only.
     @MainActor
-    var activeModel: SupportedModel {
-        AIChatRenderDebug.measure("prompt.activeModel") {
-            fallbackModelIfNeeded(selectedTierBeforeFallback)
-        }
+    var activeModelProfileOption: ExcalidrawModelProfileOption? {
+        fallbackModelOptionIfNeeded(selectedTierBeforeFallback)
     }
 
     @MainActor
-    func canSelectModel(_ model: SupportedModel) -> Bool {
-        canSelectModel(model, requiresImageInput: requiresImageInputModel)
+    var activeModelContextWindowTokens: Int? {
+        activeModelProfileOption?.maxContextTokens
     }
 
     @MainActor
-    func canSelectModel(_ model: SupportedModel, requiresImageInput: Bool) -> Bool {
-        canShowModelInPicker(model, requiresImageInput: requiresImageInput)
-            && canUsePlan(for: model)
+    var availableModelOptions: [ExcalidrawModelProfileOption] {
+        agentConfig?.excalidrawModelOptions ?? []
     }
 
     @MainActor
-    func canShowModelInPicker(_ model: SupportedModel) -> Bool {
-        canShowModelInPicker(model, requiresImageInput: requiresImageInputModel)
+    func canSelectModelOption(_ option: ExcalidrawModelProfileOption) -> Bool {
+        canSelectModelOption(option, requiresImageInput: requiresImageInputModel)
     }
 
     @MainActor
-    func canShowModelInPicker(_ model: SupportedModel, requiresImageInput: Bool) -> Bool {
-        model.isVisibleInExcalidrawModelPicker
-            && (agentConfig?.allowedModels.contains(model) ?? true)
-            && (!requiresImageInput || model.supportsExcalidrawImageInput)
+    func canSelectModelOption(
+        _ option: ExcalidrawModelProfileOption,
+        requiresImageInput: Bool
+    ) -> Bool {
+        canShowModelOption(option, requiresImageInput: requiresImageInput)
+            && canUsePlan(for: option)
     }
 
     @MainActor
-    func canUsePlan(for model: SupportedModel) -> Bool {
-        !model.requiresMaxAIPlan || store.canUseExtraHighAIModel
+    func canShowModelOption(
+        _ option: ExcalidrawModelProfileOption,
+        requiresImageInput: Bool
+    ) -> Bool {
+        option.isVisible
+            && (!requiresImageInput || option.supportsImageInput)
     }
 
     @MainActor
-    func fallbackModelIfNeeded(_ model: SupportedModel) -> SupportedModel {
-        fallbackModelIfNeeded(model, requiresImageInput: requiresImageInputModel)
+    func canUsePlan(for option: ExcalidrawModelProfileOption) -> Bool {
+        !option.requiresMaxAIPlan || store.canUseExtraHighAIModel
     }
 
     @MainActor
-    func fallbackModelIfNeeded(_ tier: ExcalidrawModelTier) -> SupportedModel {
-        fallbackModelIfNeeded(tier, requiresImageInput: requiresImageInputModel)
+    func modelOption(for tier: ExcalidrawModelTier) -> ExcalidrawModelProfileOption? {
+        availableModelOptions.first(where: { $0.profileID == tier.rawValue })
     }
 
     @MainActor
-    func fallbackModelIfNeeded(
+    func fallbackModelOptionIfNeeded(_ tier: ExcalidrawModelTier) -> ExcalidrawModelProfileOption? {
+        fallbackModelOptionIfNeeded(tier, requiresImageInput: requiresImageInputModel)
+    }
+
+    @MainActor
+    func fallbackModelOptionIfNeeded(
         _ tier: ExcalidrawModelTier,
         requiresImageInput: Bool
-    ) -> SupportedModel {
-        let preferred = tier.canonicalModel
-        guard !canSelectModel(preferred, requiresImageInput: requiresImageInput) else {
+    ) -> ExcalidrawModelProfileOption? {
+        if let preferred = modelOption(for: tier),
+           canSelectModelOption(preferred, requiresImageInput: requiresImageInput) {
             return preferred
         }
 
-        let candidates = AIChatRenderDebug.measure("prompt.fallbackModel.candidates") {
-            let availableModels = agentConfig?.allowedModels
-                ?? ExcalidrawModelTier.allCases.map(\.canonicalModel)
-            return availableModels.filter {
-                canSelectModel($0, requiresImageInput: requiresImageInput)
-            }
+        return AIChatRenderDebug.measure("prompt.fallbackModel.candidates") {
+            availableModelOptions.filter {
+                canSelectModelOption($0, requiresImageInput: requiresImageInput)
+            }.first
         }
-        return SupportedModel.nearestExcalidrawFallback(to: tier, from: candidates)
-            ?? preferred
     }
 
     @MainActor
-    func fallbackModelIfNeeded(
-        _ model: SupportedModel,
-        requiresImageInput: Bool
-    ) -> SupportedModel {
-        guard !canSelectModel(model, requiresImageInput: requiresImageInput) else { return model }
-
-        let candidates = AIChatRenderDebug.measure("prompt.fallbackModel.candidates") {
-            let availableModels = agentConfig?.allowedModels
-                ?? ExcalidrawModelTier.allCases.map(\.canonicalModel)
-            return availableModels.filter {
-                canSelectModel($0, requiresImageInput: requiresImageInput)
-            }
-        }
-        return SupportedModel.nearestExcalidrawFallback(to: model, from: candidates)
-            ?? ExcalidrawModelTier.medium.canonicalModel
-    }
-
-    @MainActor
-    func modelForSend(files: [ChatMessageContent.File]) -> SupportedModel {
-        return fallbackModelIfNeeded(
+    func modelProfileOptionForSend(files: [ChatMessageContent.File]) -> ExcalidrawModelProfileOption? {
+        fallbackModelOptionIfNeeded(
             selectedTierBeforeFallback,
             requiresImageInput: requiresImageInputModel || files.containsImageInput
         )
@@ -373,13 +390,14 @@ struct PromptInputView<Background: View, Header: View>: View {
         guard canInsertImages else { return false }
 
         let selectedTier = selectedTierBeforeFallback
-        let selectedModel = selectedTier.canonicalModel
-        guard !selectedModel.supportsExcalidrawImageInput else { return true }
+        guard let selectedOption = modelOption(for: selectedTier) else { return true }
+        guard !selectedOption.supportsImageInput else { return true }
 
-        let upgradedModel = fallbackModelIfNeeded(selectedTier, requiresImageInput: true)
-        guard upgradedModel.supportsExcalidrawImageInput,
-              let upgradedTier = upgradedModel.excalidrawTier
-        else { return false }
+        guard let upgradedOption = fallbackModelOptionIfNeeded(selectedTier, requiresImageInput: true) else {
+            return false
+        }
+        guard upgradedOption.supportsImageInput else { return false }
+        let upgradedTier = upgradedOption.tier
 
         if let id = conversationID {
             prefs.setTier(upgradedTier, for: id)
@@ -402,10 +420,10 @@ struct PromptInputView<Background: View, Header: View>: View {
     var canInsertImages: Bool {
         guard let agentConfig else { return true }
         return AIChatRenderDebug.measure("prompt.canInsertImages") {
-            agentConfig.allowedModels.contains {
-                $0.isVisibleInExcalidrawModelPicker
+            agentConfig.excalidrawModelOptions.contains {
+                $0.isVisible
                     && canUsePlan(for: $0)
-                    && $0.supportsExcalidrawImageInput
+                    && $0.supportsImageInput
             }
         }
     }
@@ -446,9 +464,73 @@ struct PromptInputView<Background: View, Header: View>: View {
         aiChatState.promptDraftState(forKey: promptDraftKey)
     }
 
+    var usesCompactIOSIslandInput: Bool {
+#if os(iOS)
+        style.surface == .compactIOSIsland
+#else
+        false
+#endif
+    }
+
     var body: some View {
         let _ = AIChatRenderDebug.hit("PromptInputView.body")
 
+        bodyContent
+        .task {
+            if focusOnAppear {
+                await Task.yield()
+                await MainActor.run {
+                    isInputFocused = true
+                }
+            }
+            await loadAgentConfigIfNeeded()
+        }
+        .watch(value: prefs.isAIEnabled) { isEnabled in
+            guard !isEnabled else { return }
+            cancelCurrentGeneration()
+        }
+#if os(iOS)
+        .watch(value: isInputFocused) { _, isFocused in
+            handleCompactIOSInputFocusChanged(isFocused)
+        }
+#endif
+#if DEBUG
+        .sheet(isPresented: $isDebugContextPresented) {
+            debugChatContextSheet
+        }
+#endif
+    }
+
+    @ViewBuilder
+    private var bodyContent: some View {
+#if os(iOS)
+        if usesCompactIOSIslandInput {
+            iOSIslandInputContent
+        } else {
+            regularBodyContent
+        }
+#else
+        regularBodyContent
+#endif
+    }
+
+#if os(iOS)
+    @MainActor
+    private func handleCompactIOSInputFocusChanged(_ isFocused: Bool) {
+        guard usesCompactIOSIslandInput else { return }
+        guard !isFocused else { return }
+        guard layoutState.isCompactAIChatToolbarPresented,
+              layoutState.isCompactAIChatInputEditing,
+              !layoutState.isCompactAIChatAttachmentPickerPresented
+        else {
+            return
+        }
+        layoutState.exitCompactAIChatInputEditing()
+    }
+#endif
+
+    @ViewBuilder
+    private var regularBodyContent: some View {
         ZStack {
             if #available(macOS 26.0, iOS 26.0, *) {
                 content()
@@ -457,18 +539,6 @@ struct PromptInputView<Background: View, Header: View>: View {
                     .padding(8)
             }
         }
-        .task {
-            await loadAgentConfigIfNeeded()
-        }
-        .watch(value: prefs.isAIEnabled) { isEnabled in
-            guard !isEnabled else { return }
-            cancelCurrentGeneration()
-        }
-#if DEBUG
-        .sheet(isPresented: $isDebugContextPresented) {
-            debugChatContextSheet
-        }
-#endif
     }
 
     @MainActor
@@ -534,12 +604,20 @@ extension PromptInputView where Header == EmptyView {
     init(
         conversationID: Binding<String?>,
         pendingQueue: Binding<[PendingQueueMessage]>,
-        style: PromptInputStyle<Background>
+        style: PromptInputStyle<Background>,
+        focusOnAppear: Bool = false,
+        showsCompactIOSFullChatButton: Bool = true,
+        dismissKeyboardOnSuccessfulSubmit: Bool = false,
+        onSuccessfulSubmit: (() -> Void)? = nil
     ) {
         self.init(
             conversationID: conversationID,
             pendingQueue: pendingQueue,
             style: style,
+            focusOnAppear: focusOnAppear,
+            showsCompactIOSFullChatButton: showsCompactIOSFullChatButton,
+            dismissKeyboardOnSuccessfulSubmit: dismissKeyboardOnSuccessfulSubmit,
+            onSuccessfulSubmit: onSuccessfulSubmit,
             header: { EmptyView() }
         )
     }
@@ -567,12 +645,18 @@ extension PromptInputView where Background == PlatformDefaultPromptBackground {
     init(
         conversationID: Binding<String?>,
         pendingQueue: Binding<[PendingQueueMessage]>,
+        style: PromptInputStyle<PlatformDefaultPromptBackground> = .inspector,
+        showsCompactIOSFullChatButton: Bool = true,
+        onSuccessfulSubmit: (() -> Void)? = nil,
         @ViewBuilder header: () -> Header
     ) {
         self.init(
             conversationID: conversationID,
             pendingQueue: pendingQueue,
-            style: .inspector,
+            style: style,
+            focusOnAppear: false,
+            showsCompactIOSFullChatButton: showsCompactIOSFullChatButton,
+            onSuccessfulSubmit: onSuccessfulSubmit,
             header: header
         )
     }

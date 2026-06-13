@@ -11,9 +11,15 @@ import Combine
 import Logging
 import QuartzCore
 import UniformTypeIdentifiers
+#if os(iOS)
+import UIKit
+#endif
 
 class ExcalidrawWebView: WKWebView {
     var shouldHandleInput = true
+#if os(iOS)
+    private var indirectScrollForwarder: ExcalidrawIndirectScrollForwarder?
+#endif
     
     enum ToolbarActionKey {
         case number(Int)
@@ -32,6 +38,9 @@ class ExcalidrawWebView: WKWebView {
 #if canImport(UIKit)
         self.scrollView.isScrollEnabled = false
         self.scrollView.backgroundColor = .clear
+#if os(iOS)
+        self.indirectScrollForwarder = ExcalidrawIndirectScrollForwarder(webView: self)
+#endif
 #endif
     }
     
@@ -63,6 +72,171 @@ class ExcalidrawWebView: WKWebView {
     }
 #endif
 }
+
+#if os(iOS)
+private final class ExcalidrawIndirectScrollForwarder: NSObject, UIGestureRecognizerDelegate {
+    private weak var webView: WKWebView?
+    private weak var scrollRecognizer: UIPanGestureRecognizer?
+    private weak var pinchRecognizer: UIPinchGestureRecognizer?
+    private let pinchWheelDeltaMultiplier: CGFloat = 54
+
+    init(webView: WKWebView) {
+        self.webView = webView
+        super.init()
+
+        let scrollRecognizer = UIPanGestureRecognizer(
+            target: self,
+            action: #selector(handleIndirectScroll(_:))
+        )
+        scrollRecognizer.allowedScrollTypesMask = .all
+        scrollRecognizer.cancelsTouchesInView = false
+        scrollRecognizer.delaysTouchesBegan = false
+        scrollRecognizer.delaysTouchesEnded = false
+        scrollRecognizer.delegate = self
+        webView.addGestureRecognizer(scrollRecognizer)
+        self.scrollRecognizer = scrollRecognizer
+
+        let pinchRecognizer = UIPinchGestureRecognizer(
+            target: self,
+            action: #selector(handleIndirectPinch(_:))
+        )
+        pinchRecognizer.cancelsTouchesInView = false
+        pinchRecognizer.delaysTouchesBegan = false
+        pinchRecognizer.delaysTouchesEnded = false
+        pinchRecognizer.delegate = self
+        webView.addGestureRecognizer(pinchRecognizer)
+        self.pinchRecognizer = pinchRecognizer
+    }
+
+    @objc private func handleIndirectScroll(_ recognizer: UIPanGestureRecognizer) {
+        guard recognizer.state == .began || recognizer.state == .changed,
+              let webView else {
+            return
+        }
+
+        let translation = recognizer.translation(in: webView)
+        recognizer.setTranslation(.zero, in: webView)
+
+        guard abs(translation.x) > 0.01 || abs(translation.y) > 0.01 else {
+            return
+        }
+
+        let location = recognizer.location(in: webView)
+        dispatchWheelEvent(
+            deltaX: -translation.x,
+            deltaY: -translation.y,
+            location: location,
+            in: webView
+        )
+    }
+
+    @objc private func handleIndirectPinch(_ recognizer: UIPinchGestureRecognizer) {
+        guard recognizer.state == .began || recognizer.state == .changed,
+              let webView else {
+            recognizer.scale = 1
+            return
+        }
+
+        let scale = recognizer.scale
+        recognizer.scale = 1
+
+        guard scale > 0, scale.isFinite else { return }
+
+        let deltaY = -log(scale) * pinchWheelDeltaMultiplier
+        guard abs(deltaY) > 0.01 else { return }
+
+        dispatchWheelEvent(
+            deltaX: 0,
+            deltaY: deltaY,
+            location: recognizer.location(in: webView),
+            in: webView,
+            ctrlKey: true
+        )
+    }
+
+    func gestureRecognizer(
+        _ gestureRecognizer: UIGestureRecognizer,
+        shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer
+    ) -> Bool {
+        true
+    }
+
+    func gestureRecognizer(
+        _ gestureRecognizer: UIGestureRecognizer,
+        shouldReceive event: UIEvent
+    ) -> Bool {
+        if gestureRecognizer === scrollRecognizer {
+            return event.type == .scroll
+        }
+
+        if gestureRecognizer === pinchRecognizer {
+            return event.type == .transform
+        }
+
+        return false
+    }
+
+    func gestureRecognizer(
+        _ gestureRecognizer: UIGestureRecognizer,
+        shouldReceive touch: UITouch
+    ) -> Bool {
+        false
+    }
+
+    func gestureRecognizer(
+        _ gestureRecognizer: UIGestureRecognizer,
+        shouldReceive press: UIPress
+    ) -> Bool {
+        false
+    }
+
+    private func dispatchWheelEvent(
+        deltaX: CGFloat,
+        deltaY: CGFloat,
+        location: CGPoint,
+        in webView: WKWebView,
+        ctrlKey: Bool = false
+    ) {
+        let script = """
+        (() => {
+            const clientX = Math.max(0, Math.min(window.innerWidth, \(Self.javascriptNumber(location.x))));
+            const clientY = Math.max(0, Math.min(window.innerHeight, \(Self.javascriptNumber(location.y))));
+            const target = document.elementFromPoint(clientX, clientY)
+                || document.querySelector(".excalidraw-container")
+                || document.body;
+
+            if (!target) {
+                return false;
+            }
+
+            const event = new WheelEvent("wheel", {
+                bubbles: true,
+                cancelable: true,
+                composed: true,
+                clientX,
+                clientY,
+                screenX: clientX,
+                screenY: clientY,
+                deltaX: \(Self.javascriptNumber(deltaX)),
+                deltaY: \(Self.javascriptNumber(deltaY)),
+                deltaZ: 0,
+                deltaMode: 0,
+                ctrlKey: \(ctrlKey ? "true" : "false")
+            });
+
+            return target.dispatchEvent(event);
+        })();
+        """
+
+        webView.evaluateJavaScript(script, completionHandler: nil)
+    }
+
+    private static func javascriptNumber(_ value: CGFloat) -> String {
+        let number = Double(value)
+        return number.isFinite ? String(number) : "0"
+    }
+}
+#endif
 
 extension Notification.Name {
     static let forceReloadExcalidrawFile = Notification.Name("ForceReloadExcalidrawFile")

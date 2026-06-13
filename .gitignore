@@ -109,4 +109,7 @@ PRIVATE_TIPS.md
 CLAUDE.md
 ExcalidrawZUIPlayground
 ExcalidrawZ/**/*.md
+ExcalidrawZ/SidebarTrailing/AIChat/**/*.json
 scripts/
+Resources/scripts/
+Resources/scripts/**

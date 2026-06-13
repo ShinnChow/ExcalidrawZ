@@ -13,6 +13,7 @@ extension AISettingsView {
         @ViewBuilder leading: () -> Leading,
         @ViewBuilder accessory: () -> Accessory
     ) -> some View {
+#if os(macOS)
         HStack(alignment: .top, spacing: 22) {
             leading()
 
@@ -26,6 +27,59 @@ extension AISettingsView {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+#else
+        if usesCompactSettingsLayout {
+            VStack(alignment: .leading, spacing: 12) {
+                leading()
+
+                if prefs.isAIEnabled {
+                    accessory()
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        } else {
+            ViewThatFits(in: .horizontal) {
+                HStack(alignment: .top, spacing: 22) {
+                    leading()
+
+                    Spacer(minLength: 0)
+
+                    if prefs.isAIEnabled {
+                        VStack(alignment: .trailing, spacing: 12) {
+                            if !usesToolbarSettingsTabs {
+                                tabPicker
+                            }
+                            accessory()
+                        }
+                    }
+                }
+                .fixedSize(horizontal: true, vertical: false)
+
+                VStack(alignment: .leading, spacing: 12) {
+                    leading()
+
+                    if prefs.isAIEnabled {
+                        ViewThatFits(in: .horizontal) {
+                            HStack(alignment: .center, spacing: 12) {
+                                if !usesToolbarSettingsTabs {
+                                    tabPicker
+                                }
+                                accessory()
+                            }
+
+                            VStack(alignment: .leading, spacing: 10) {
+                                if !usesToolbarSettingsTabs {
+                                    tabPicker
+                                }
+                                accessory()
+                            }
+                        }
+                    }
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+#endif
     }
 
     @ViewBuilder
@@ -36,6 +90,36 @@ extension AISettingsView {
             EmptyView()
         }
     }
+
+#if os(iOS)
+    @ViewBuilder
+    var bottomTabBar: some View {
+        ForEach(SettingsTab.allCases) { tab in
+            toolbarTabButton(tab)
+        }
+    }
+
+    @ViewBuilder
+    var toolbarTabBar: some View {
+        ForEach(SettingsTab.allCases) { tab in
+            toolbarTabButton(tab)
+        }
+    }
+
+    private func toolbarTabButton(_ tab: SettingsTab) -> some View {
+        Button {
+            withAnimation(.easeInOut(duration: 0.18)) {
+                selectedTab = tab
+            }
+        } label: {
+            Label(tab.title, systemSymbol: tab.iconSymbol)
+        }
+        .labelStyle(.iconOnly)
+        .foregroundStyle(selectedTab == tab ? Color.accentColor : Color.primary)
+        .tint(selectedTab == tab ? Color.accentColor : Color.primary)
+        .help(tab.title)
+    }
+#endif
 
     @ViewBuilder
     var tabPicker: some View {
@@ -76,6 +160,7 @@ extension AISettingsView {
                 .buttonStyle(.plain)
             }
         }
+        .fixedSize(horizontal: true, vertical: false)
         .padding(3)
         .background {
             Capsule()

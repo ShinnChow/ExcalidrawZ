@@ -9,21 +9,114 @@ import SwiftUI
 
 import ChocofordUI
 import SFSafeSymbols
+#if canImport(UIKit)
+import UIKit
+#endif
 
 struct ExcalidrawTrailingControls: View {
     @Environment(\.containerHorizontalSizeClass) private var containerHorizontalSizeClass
 
+    @EnvironmentObject private var appPreference: AppPreference
     @EnvironmentObject private var layoutState: LayoutState
     @EnvironmentObject private var fileState: FileState
+    @ObservedObject private var aiChatPreferences = AIChatPreferences.shared
+    @AppStorage(FloatingInspectorMetrics.widthStorageKey) private var floatingInspectorWidth = FloatingInspectorMetrics.defaultWidth
+    @State private var displayedHorizontalOffset: CGFloat = 0
+    @State private var hasInitializedHorizontalOffset = false
+    @State private var pendingHorizontalOffsetTask: Task<Void, Never>?
 
     private var historyDisabled: Bool {
         fileState.currentActiveFile == nil
     }
 
     private var shouldShowControls: Bool {
-        containerHorizontalSizeClass != .compact &&
+        shouldShowInCurrentSizeClass &&
         fileState.currentActiveFile != nil &&
         !fileState.activeCollaborationFileIsLoading
+    }
+
+    private var shouldShowInCurrentSizeClass: Bool {
+#if os(iOS)
+        containerHorizontalSizeClass != .compact
+#else
+        containerHorizontalSizeClass != .compact
+#endif
+    }
+
+    private var isCompactIOS: Bool {
+#if os(iOS)
+        containerHorizontalSizeClass == .compact
+#else
+        false
+#endif
+    }
+
+    private var topPadding: CGFloat {
+#if os(iOS)
+        if containerHorizontalSizeClass == .compact {
+            return 116
+        }
+        return shouldReserveFloatingInspectorSpace ? FloatingInspectorMetrics.controlsTopPadding : 16
+#else
+        16
+#endif
+    }
+
+    private var trailingPadding: CGFloat {
+#if os(iOS)
+        containerHorizontalSizeClass == .compact ? 12 : 8
+#else
+        8
+#endif
+    }
+
+    private var horizontalOffset: CGFloat {
+#if os(iOS)
+        floatingInspectorControlsTrailingInset
+#else
+        0
+#endif
+    }
+
+    private var effectiveHorizontalOffset: CGFloat {
+        hasInitializedHorizontalOffset ? displayedHorizontalOffset : horizontalOffset
+    }
+
+    private var floatingInspectorControlsTrailingInset: CGFloat {
+#if os(iOS)
+        shouldReserveFloatingInspectorSpace
+        ? FloatingInspectorMetrics.controlsInset(for: CGFloat(floatingInspectorWidth))
+        : 0
+#else
+        0
+#endif
+    }
+
+    private var shouldReserveFloatingInspectorSpace: Bool {
+#if os(iOS)
+        guard layoutState.isInspectorPresented,
+              containerHorizontalSizeClass != .compact else {
+            return false
+        }
+        if appPreference.inspectorLayout == .floatingBar {
+            return true
+        }
+        if #available(iOS 26.0, *),
+           UIDevice.current.userInterfaceIdiom == .pad {
+            return true
+        }
+        return false
+#else
+        false
+#endif
+    }
+
+    private var controlSpacing: CGFloat {
+#if os(iOS)
+        containerHorizontalSizeClass == .compact ? 8 : 10
+#else
+        10
+#endif
     }
 
     private func isDisabled(tab: LayoutState.InspectorTab) -> Bool {
@@ -35,9 +128,27 @@ struct ExcalidrawTrailingControls: View {
         }
     }
 
+    private var shouldOpenAIChatAsIsland: Bool {
+        isCompactIOS &&
+        AIChatAvailability.isAvailable &&
+        aiChatPreferences.isAIEnabled &&
+        !fileState.currentActiveFileIsInTrash
+    }
+
+    private func toggleAIChatPresentation() {
+        if layoutState.isAIChatIslandMode {
+            layoutState.isAIChatIslandMode = false
+        } else if shouldOpenAIChatAsIsland {
+            layoutState.isInspectorPresented = false
+            layoutState.enterAIChatIsland()
+        } else {
+            layoutState.toggleInspector(.aiChat)
+        }
+    }
+
     var body: some View {
         if shouldShowControls {
-            VStack(alignment: .trailing, spacing: 10) {
+            VStack(alignment: .trailing, spacing: controlSpacing) {
                 InspectorTabButton(
                     tab: .preference,
                     icon: .sliderHorizontal3,
@@ -71,7 +182,8 @@ struct ExcalidrawTrailingControls: View {
                     tab: .aiChat,
                     icon: .sparkles,
                     title: "AI Chat",
-                    isDisabled: isDisabled(tab: .aiChat)
+                    isDisabled: isDisabled(tab: .aiChat),
+                    action: toggleAIChatPresentation
                 )
 
 #if DEBUG
@@ -83,37 +195,114 @@ struct ExcalidrawTrailingControls: View {
                 )
 #endif
             }
-            .padding(.top, 16)
-            .padding(.trailing, 8)
+            .padding(.top, topPadding)
+            .padding(.trailing, trailingPadding + effectiveHorizontalOffset)
+            .onAppear {
+                syncDisplayedHorizontalOffsetWithoutAnimation()
+            }
+            .onDisappear {
+                pendingHorizontalOffsetTask?.cancel()
+                pendingHorizontalOffsetTask = nil
+                hasInitializedHorizontalOffset = false
+            }
+            .watch(value: shouldReserveFloatingInspectorSpace) { _, _ in
+                scheduleAnimatedDisplayedHorizontalOffsetUpdate()
+            }
+            .watch(value: floatingInspectorWidth) { _, _ in
+                guard shouldReserveFloatingInspectorSpace else { return }
+                syncDisplayedHorizontalOffsetWithoutAnimation()
+            }
+            .animation(.easeOut, value: topPadding)
+        }
+    }
+
+    private func scheduleAnimatedDisplayedHorizontalOffsetUpdate() {
+        pendingHorizontalOffsetTask?.cancel()
+        pendingHorizontalOffsetTask = Task { @MainActor in
+            await Task.yield()
+            guard !Task.isCancelled else { return }
+            withAnimation(.easeOut) {
+                displayedHorizontalOffset = horizontalOffset
+                hasInitializedHorizontalOffset = true
+            }
+        }
+    }
+
+    private func syncDisplayedHorizontalOffsetWithoutAnimation() {
+        pendingHorizontalOffsetTask?.cancel()
+        pendingHorizontalOffsetTask = nil
+
+        var transaction = Transaction()
+        transaction.disablesAnimations = true
+        withTransaction(transaction) {
+            displayedHorizontalOffset = horizontalOffset
+            hasInitializedHorizontalOffset = true
         }
     }
 }
 
 private struct InspectorTabButton: View {
+    @Environment(\.containerHorizontalSizeClass) private var containerHorizontalSizeClass
     @EnvironmentObject private var layoutState: LayoutState
 
     let tab: LayoutState.InspectorTab
     let icon: SFSymbol
     let title: String
     var isDisabled: Bool = false
+    var action: (() -> Void)?
 
     private var isActive: Bool {
-        layoutState.isInspectorPresented && layoutState.activeInspectorTab == tab
+        if tab == .aiChat, layoutState.isAIChatIslandMode {
+            return true
+        }
+        return layoutState.isInspectorPresented && layoutState.activeInspectorTab == tab
+    }
+
+    private var isCompactIOS: Bool {
+#if os(iOS)
+        containerHorizontalSizeClass == .compact
+#else
+        false
+#endif
+    }
+
+    private var buttonStyleSize: ModernButtonStyleModifier.Size {
+#if os(iOS)
+        .regular
+#else
+        .large
+#endif
+    }
+
+    private var iconSize: CGFloat {
+        16
+    }
+
+    private var iconFrame: CGFloat {
+#if os(iOS)
+        return containerHorizontalSizeClass == .compact ? 28 : 24
+#else
+        return 24
+#endif
     }
 
     var body: some View {
         Button {
             guard !isDisabled else { return }
-            layoutState.toggleInspector(tab)
+            if let action {
+                action()
+            } else {
+                layoutState.toggleInspector(tab)
+            }
         } label: {
             Label(title, systemSymbol: icon)
-                .font(.system(size: 16))
-                .frame(width: 24, height: 24)
+                .font(.system(size: iconSize))
+                .frame(width: iconFrame, height: iconFrame)
         }
         .labelStyle(.iconOnly)
         .modernButtonStyle(
             style: isActive ? .glassProminent : .glass,
-            size: .large,
+            size: buttonStyleSize,
             shape: .circle
         )
         .help(title)

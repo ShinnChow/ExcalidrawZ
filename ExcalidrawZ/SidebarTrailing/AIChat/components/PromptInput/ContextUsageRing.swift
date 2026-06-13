@@ -15,13 +15,10 @@
 //
 
 import SwiftUI
-import LLMCore
 
 struct ContextUsageRing: View {
-    /// Model whose context window we compare against. Driven by the
-    /// active model from `PromptInputView` so the denominator follows
-    /// the user's tier choice.
-    let model: SupportedModel
+    /// Context window exposed by the active server-defined model profile.
+    var maxContextTokens: Int?
 
     /// Hook for the future compact-context action. v1 leaves this nil
     /// and the button just shows the gauge — keeping the API in place
@@ -30,7 +27,7 @@ struct ContextUsageRing: View {
     var onTap: (() -> Void)? = nil
     var usedTokens: Int?
 
-    private var maxTokens: Int { model.maxContextTokens ?? 0 }
+    private var maxTokens: Int { maxContextTokens ?? 0 }
 
     private var fraction: Double {
         guard let usedTokens, maxTokens > 0 else { return 0 }
@@ -69,8 +66,17 @@ struct ContextUsageRing: View {
                 }
                 .frame(width: 18, height: 18)
                 .help(helpText)
-                .accessibilityLabel(String(localizable: .aiChatContextUsageTitle))
+                .accessibilityLabel(
+                    onTap == nil
+                        ? String(localizable: .aiChatContextUsageTitle)
+                        : String(localizable: .aiChatButtonCompactContext)
+                )
                 .accessibilityValue(Text(helpText))
+#if os(iOS)
+                .frame(minWidth: 32, minHeight: 32)
+                .contentShape(Rectangle())
+                .hoverEffect()
+#endif
             }
         }
         .animation(.smooth, value: fraction < 0.5)

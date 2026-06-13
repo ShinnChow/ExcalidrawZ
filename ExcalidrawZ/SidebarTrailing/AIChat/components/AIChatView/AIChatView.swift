@@ -18,6 +18,7 @@ struct AIChatView: View {
     @EnvironmentObject var llmState: LLMStateObject
     @EnvironmentObject var aiChatState: AIChatState
     @Environment(\.alertToast) var alertToast
+    @Environment(\.containerHorizontalSizeClass) var containerHorizontalSizeClass
     @ObservedObject var prefs = AIChatPreferences.shared
     
     /// Conversation id lives on `FileState` (chats are scoped to the current
@@ -48,9 +49,13 @@ struct AIChatView: View {
     @State var revertRequiredUserMessageIDs: Set<String> = []
     @State var messageWindow = ChatMessageWindowState(pageSize: 20)
     @State var aiActionTask: Task<Void, Never>?
+    @State var regularChatInputOverlayHeight: CGFloat = 0
+    @State var compactChatInputOverlayHeight: CGFloat = 0
+    @StateObject var promptTextAreaProxy = TextAreaProxy()
     /// Confirmation dialog for the "Clear chat" toolbar action — destructive,
     /// so we route through a confirmationDialog rather than firing on tap.
     @State var isConfirmingClear: Bool = false
+    @State var isAISettingsSheetPresented: Bool = false
 
     /// Tapped Get Started on the first-run welcome cover. We only fall back
     /// on the `conversations` count for "first-time visitor" detection;
@@ -116,6 +121,23 @@ struct AIChatView: View {
         AIChatAvailability.isAvailable
     }
 
+    private var isCompactIOS: Bool {
+#if os(iOS)
+        containerHorizontalSizeClass == .compact
+#else
+        false
+#endif
+    }
+
+    var promptInputStyle: PromptInputStyle<PlatformDefaultPromptBackground> {
+#if os(iOS)
+        if isCompactIOS {
+            return .compactIOSIsland
+        }
+#endif
+        return .inspector
+    }
+
     @MainActor
     func activeFileAllowsAIContext() async -> Bool {
         guard let activeFile = fileState.currentActiveFile else { return false }
@@ -153,6 +175,12 @@ struct AIChatView: View {
                         hasDismissedWelcome = true
                         isShowingWelcomeManually = false
                     }
+                    if isCompactIOS,
+                       fileState.currentActiveFile != nil,
+                       !fileState.currentActiveFileIsInTrash {
+                        layoutState.isInspectorPresented = false
+                        layoutState.enterCompactAIChatInputEditing()
+                    }
                 }
                 .transition(.opacity)
             } else if shouldShowWelcome {
@@ -168,6 +196,7 @@ struct AIChatView: View {
                     .transition(.opacity)
             }
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .toolbar(content: toolbar)
         .confirmationDialog(
             String(localizable: .aiChatClearChatConfimationDialogTitle),
@@ -181,18 +210,37 @@ struct AIChatView: View {
         } message: {
             Text(localizable: .aiChatClearChatConfimationDialogMessage)
         }
+#if os(iOS)
+        .sheet(isPresented: $isAISettingsSheetPresented) {
+            aiSettingsSheet
+        }
+#endif
         .background {
             debugPublishProbe
-        }
-        .task {
-            guard isAIAvailable, prefs.isAIEnabled else { return }
-            await LLMCreditsRefreshCoordinator.shared.refreshCredits(reason: .aiChatAppear)
         }
         .watch(value: prefs.isAIEnabled) { isEnabled in
             guard !isEnabled else { return }
             cancelAIWorkForDisabledAI()
         }
+        .task {
+            guard isAIAvailable, prefs.isAIEnabled else { return }
+            await LLMCreditsRefreshCoordinator.shared.refreshCredits(reason: .aiChatAppear)
+        }
     }
+
+#if os(iOS)
+    @ViewBuilder
+    private var aiSettingsSheet: some View {
+        if #available(iOS 16.4, *) {
+            SettingsView()
+                .presentationContentInteraction(.scrolls)
+                .swiftyAlert()
+        } else {
+            SettingsView()
+                .swiftyAlert()
+        }
+    }
+#endif
 
     @ViewBuilder
     private var debugPublishProbe: some View {
@@ -219,94 +267,17 @@ struct AIChatView: View {
     var chatBody: some View {
         let _ = AIChatRenderDebug.hit("AIChatView.chatBody")
 
-        VStack(spacing: 0) {
-            ZStack {
-                if AIChatRenderDebug.hideMessageList {
-                    Color.clear
-                } else if shouldShowConversationLoadingPlaceholder {
-                    conversationLoadingPlaceholder()
-                } else if let conversation, !conversation.messages.isEmpty {
-                    messageList(messages: conversation.messages)
-                } else if currentTransientError != nil {
-                    messageList(messages: conversation?.messages ?? [])
-                } else {
-                    emptyPlaceholder()
-                }
+        ZStack {
+#if os(iOS)
+            if isCompactIOS {
+                compactIOSChatBody
+            } else {
+                regularChatBody
             }
-            .opacity(isMessageListInitiallySettled || shouldShowConversationLoadingPlaceholder ? 1 : 0)
-            .animation(.easeOut(duration: 0.12), value: isMessageListInitiallySettled)
-            .watch(value: fileState.isAIChatConversationLoading) { _, isLoading in
-                if isLoading {
-                    isHoldingConversationLoadingPlaceholder = true
-                } else if isMessageListInitiallySettled {
-                    isHoldingConversationLoadingPlaceholder = false
-                } else {
-                    isHoldingConversationLoadingPlaceholder = fileState.currentActiveFile != nil
-                }
-            }
-            
-            VStack(spacing: 6) {
-                PendingQueueView(
-                    messages: aiChatState.pendingQueue,
-                    onRemove: { id in
-                        withAnimation(.easeInOut(duration: 0.2)) {
-                            aiChatState.pendingQueue.removeAll { $0.id == id }
-                        }
-                    }
-                )
-
-                if isCompactingThisConversation {
-                    CompactingIndicatorView()
-                        .transition(.opacity)
-                }
-
-                ZStack(alignment: .top) {
-                    PromptInputView(
-                        conversationID: conversationID,
-                        pendingQueue: $aiChatState.pendingQueue
-                    ) {
-                        if let editSession = activeEditSession {
-                            EditSessionBanner(
-                                mode: editSession.mode,
-                                onCancel: {
-                                    aiChatState.cancelEditing(
-                                        conversationID: editSession.conversationID
-                                    )
-                                }
-                            )
-                            .transition(.move(edge: .bottom).combined(with: .opacity))
-                        }
-                    }
-                    .disabled(
-                        llmState.pendingApprovalRequest != nil ||
-                        fileState.isAIChatConversationLoading ||
-                        fileState.currentActiveFileIsInTrash
-                    )
-
-                    ApprovalPromptView()
-                }
-            }
-            .padding(.horizontal, 10)
-            // Animate the approval card's appearance/disappearance so
-            // the input box doesn't jump when the card flips visibility.
-            // Drive the animation off the *gate result* (request present
-            // AND its tool-call already revealed), not just the request
-            // id — otherwise SwiftUI would treat the gate-driven flip
-            // as an unanimated layout change.
-            .animation(
-                .easeInOut(duration: 0.25),
-                value: shouldShowApprovalCard
-            )
-            .animation(
-                .easeInOut(duration: 0.2),
-                value: isCompactingThisConversation
-            )
-            .animation(
-                .easeInOut(duration: 0.2),
-                value: activeEditSession
-            )
+#else
+            regularChatBody
+#endif
         }
-        .padding(.bottom, 10)
         // The approval card eats vertical space from the chat scroll
         // view. Without an explicit nudge the messages slide up but the
         // viewport's last-row anchor stays where it was — the user ends
@@ -322,6 +293,152 @@ struct AIChatView: View {
         .task(id: messageListSwitchID) {
             settleMessageListAfterSwitch()
         }
+    }
+
+    @ViewBuilder
+    var regularChatBody: some View {
+        VStack(spacing: 0) {
+            chatMessageStage(bottomContentPadding: 0)
+
+            chatInputControls
+                .padding(.bottom, 10)
+                .readHeight($regularChatInputOverlayHeight)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .watch(value: regularChatInputOverlayHeight) { oldHeight, newHeight in
+            guard oldHeight != newHeight,
+                  newHeight > 0,
+                  isPinnedToBottom
+            else {
+                return
+            }
+            requestScrollToBottom(animated: false)
+        }
+    }
+
+#if os(iOS)
+    @ViewBuilder
+    var compactIOSChatBody: some View {
+        ZStack(alignment: .bottom) {
+            chatMessageStage(bottomContentPadding: compactChatInputOverlayHeight)
+
+            chatInputControls
+                .padding(.bottom, 10)
+                .readHeight($compactChatInputOverlayHeight)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .watch(value: compactChatInputOverlayHeight) { oldHeight, newHeight in
+            guard oldHeight != newHeight,
+                  newHeight > 0,
+                  isPinnedToBottom
+            else {
+                return
+            }
+            requestScrollToBottom(animated: false)
+        }
+    }
+#endif
+
+    @ViewBuilder
+    func chatMessageStage(bottomContentPadding: CGFloat) -> some View {
+        ZStack {
+            if AIChatRenderDebug.hideMessageList {
+                Color.clear
+            } else if shouldShowConversationLoadingPlaceholder {
+                conversationLoadingPlaceholder()
+            } else if let conversation, !conversation.messages.isEmpty {
+                messageList(
+                    messages: conversation.messages,
+                    bottomContentPadding: bottomContentPadding
+                )
+            } else if currentTransientError != nil {
+                messageList(
+                    messages: conversation?.messages ?? [],
+                    bottomContentPadding: bottomContentPadding
+                )
+            } else {
+                emptyPlaceholder()
+            }
+        }
+        .opacity(isMessageListInitiallySettled || shouldShowConversationLoadingPlaceholder ? 1 : 0)
+        .animation(.easeOut(duration: 0.12), value: isMessageListInitiallySettled)
+        .watch(value: fileState.isAIChatConversationLoading) { _, isLoading in
+            if isLoading {
+                isHoldingConversationLoadingPlaceholder = true
+            } else if isMessageListInitiallySettled {
+                isHoldingConversationLoadingPlaceholder = false
+            } else {
+                isHoldingConversationLoadingPlaceholder = fileState.currentActiveFile != nil
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    @ViewBuilder
+    var chatInputControls: some View {
+        VStack(spacing: 6) {
+            PendingQueueView(
+                messages: aiChatState.pendingQueue,
+                onRemove: { id in
+                    withAnimation(.easeInOut(duration: 0.2)) {
+                        aiChatState.pendingQueue.removeAll { $0.id == id }
+                    }
+                }
+            )
+
+            if isCompactingThisConversation {
+                CompactingIndicatorView()
+                    .transition(.opacity)
+            }
+
+            ZStack(alignment: .top) {
+                PromptInputView(
+                    conversationID: conversationID,
+                    pendingQueue: $aiChatState.pendingQueue,
+                    style: promptInputStyle,
+                    showsCompactIOSFullChatButton: false
+                ) {
+                    if let editSession = activeEditSession {
+                        EditSessionBanner(
+                            mode: editSession.mode,
+                            onCancel: {
+                                aiChatState.cancelEditing(
+                                    conversationID: editSession.conversationID
+                                )
+                            }
+                        )
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
+                    }
+                }
+                .disabled(
+                    llmState.pendingApprovalRequest != nil ||
+                    fileState.isAIChatConversationLoading ||
+                    fileState.currentActiveFileIsInTrash
+                )
+                .textAreaProxy(promptTextAreaProxy)
+
+                ApprovalPromptView()
+            }
+        }
+        .padding(.horizontal, 10)
+        // Animate the approval card's appearance/disappearance so
+        // the input box doesn't jump when the card flips visibility.
+        // Drive the animation off the *gate result* (request present
+        // AND its tool-call already revealed), not just the request
+        // id — otherwise SwiftUI would treat the gate-driven flip
+        // as an unanimated layout change.
+        .animation(
+            .easeInOut(duration: 0.25),
+            value: shouldShowApprovalCard
+        )
+        .animation(
+            .easeInOut(duration: 0.2),
+            value: isCompactingThisConversation
+        )
+        .animation(
+            .easeInOut(duration: 0.2),
+            value: activeEditSession
+        )
     }
 
     var activeEditSession: AIChatState.EditSession? {

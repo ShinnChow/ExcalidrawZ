@@ -11,11 +11,15 @@ import SwiftUI
 import ChocofordUI
 import LLMKit
 import SFSafeSymbols
+#if os(iOS)
+import UIKit
+#endif
 
 struct ExcalidrawEditorToolbarModifier: ViewModifier {
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.managedObjectContext) private var viewContext
     @Environment(\.containerHorizontalSizeClass) private var containerHorizontalSizeClass
+    @Environment(\.containerSize) private var containerSize
     @Environment(\.alertToast) private var alertToast
     
     @EnvironmentObject var appPreference: AppPreference
@@ -31,10 +35,35 @@ struct ExcalidrawEditorToolbarModifier: ViewModifier {
     @State private var lockedFileAccessRequest: LockedFileAccessRequest?
     @State private var existingRecoveryKeyLockRequest: LockedFileAccessRequest?
     @State private var isLockingFile = false
+
+    private var shouldFloatNavigationToolbarOverCanvas: Bool {
+#if os(iOS)
+        guard !usesCompactIOSBottomToolbar else { return false }
+        return UIDevice.current.userInterfaceIdiom == .pad
+#else
+        false
+#endif
+    }
+
+    private var usesCompactIOSBottomToolbar: Bool {
+#if os(iOS)
+        ExcalidrawToolbarLayoutPolicy.usesCompactIOSBottomToolbar(
+            horizontalSizeClass: containerHorizontalSizeClass,
+            containerWidth: containerSize.width
+        )
+#else
+        false
+#endif
+    }
+
+    private var shouldHideNavigationToolbarBackground: Bool {
+        shouldFloatNavigationToolbarOverCanvas ||
+        (fileState.currentActiveGroup == .collaboration && fileState.currentActiveFile == nil)
+    }
     
     func body(content: Content) -> some View {
         ZStack {
-            if containerHorizontalSizeClass == .compact {
+            if usesCompactIOSBottomToolbar {
                 if #available(iOS 18.0, *) {
                     content
 #if os(iOS)
@@ -64,17 +93,21 @@ struct ExcalidrawEditorToolbarModifier: ViewModifier {
             }
         }
         .toolbar(content: toolbarContent)
+#if os(iOS)
+        .modifier(CompactExcalidrawBottomToolbarStateModifier())
+#endif
         .sheet(item: $lockedFileAccessRequest) { request in
-            LockedFileAccessSheet(request: request) { _ in
+            LockedFileAccessSheet(request: request) { mode in
                 Task { @MainActor in
-                    await lockedContentState.refresh(activeFile: fileState.currentActiveFile)
+                    await finishLockedFileAccess(mode: mode)
                 }
             }
         }
         .sheet(item: $existingRecoveryKeyLockRequest) { request in
+            let mode = request.mode
             ExistingRecoveryKeyLockSheet(request: request) {
                 Task { @MainActor in
-                    await lockedContentState.refresh(activeFile: fileState.currentActiveFile)
+                    await finishLockedFileAccess(mode: mode)
                 }
             }
         }
@@ -82,16 +115,18 @@ struct ExcalidrawEditorToolbarModifier: ViewModifier {
             await lockedContentState.refresh(activeFile: fileState.currentActiveFile)
         }
 #if os(iOS)
-//        .modifier(
-//            HideToolbarModifier(
-//                isPresented: toolState.isBottomBarPresented,
-//                placement: .bottomBar
-//            )
-//        )
+        .modifier(
+            HideToolbarModifier(
+                isPresented: toolState.isBottomBarPresented
+                    && lockedContentState.activeFileLockState != .locked,
+                placement: .bottomBar
+            )
+        )
         .animation(.default, value: toolState.isBottomBarPresented)
-        .toolbarBackground(containerHorizontalSizeClass == .regular ? .automatic : .visible, for: .bottomBar)
+        .animation(.default, value: lockedContentState.activeFileLockState)
+        .toolbarBackground(usesCompactIOSBottomToolbar ? .visible : .automatic, for: .bottomBar)
         .toolbarBackground(
-            fileState.currentActiveGroup == .collaboration && fileState.currentActiveFile == nil ? .hidden : .visible,
+            shouldHideNavigationToolbarBackground ? .hidden : .visible,
             for: .navigationBar
         )
         .navigationBarTitleDisplayMode(.inline) // <- fix principal toolbar
@@ -101,55 +136,74 @@ struct ExcalidrawEditorToolbarModifier: ViewModifier {
     @ToolbarContentBuilder
     private func toolbarContent() -> some ToolbarContent {
 #if os(iOS)
-        toolbarContent_iOS()
-#else
-        toolbarContent_macOS()
+        iOSToolbarContent()
+#elseif os(macOS)
+        macOSToolbarContent()
 #endif
     }
     
 #if os(iOS)
     @ToolbarContentBuilder
-    private func toolbarContent_iOS() -> some ToolbarContent {
-        ToolbarItemGroup(
-            placement: containerHorizontalSizeClass == .regular ? .principal : .bottomBar
-        ) {
-            ExcalidrawToolbar()
+    private func iOSToolbarContent() -> some ToolbarContent {
+        ToolbarItemGroup(placement: .topBarLeading) {
+            sharedNavigationToolbarContent()
         }
-        
-        toolbarContent_macOS()
+
+        if lockedContentState.activeFileLockState != .locked {
+            if usesCompactIOSBottomToolbar {
+                CompactExcalidrawBottomToolbarContent()
+            } else {
+                ToolbarItemGroup(placement: .principal) {
+                    ExcalidrawToolbar()
+                }
+            }
+        }
+
+        sharedPrimaryActionToolbarContent()
     }
 #endif
 
+#if os(macOS)
     @ToolbarContentBuilder
-    private func toolbarContent_macOS() -> some ToolbarContent {
+    private func macOSToolbarContent() -> some ToolbarContent {
         ToolbarItemGroup(placement: .navigation) {
-            if #available(macOS 13.0, iOS 16.0, *),
-               appPreference.sidebarLayout == .sidebar {
+            sharedNavigationToolbarContent()
+        }
+        macOSToolPickerToolbarContent()
+        sharedPrimaryActionToolbarContent()
+    }
+#endif
 
-            } else if #available(macOS 13.0, iOS 16.0, *),
-               appPreference.sidebarLayout == .sidebar {
-                
-            } else if containerHorizontalSizeClass != .compact {
-                Button {
-                    layoutState.isSidebarPresented.toggle()
-                } label: {
-                    Label(.localizable(.sidebarToggleName), systemSymbol: .sidebarLeft)
-                }
-            }
-            
-            if fileState.currentActiveGroup != nil {
-                HStack {
-                    NavigationBackButton()
-                    title()
-                    titleBarActionsMenu()
-                }
-            }
-            
-            if #available(macOS 13.0, iOS 16.0, *) { } else {
-                NewFileButton()
+    @ViewBuilder
+    private func sharedNavigationToolbarContent() -> some View {
+        if #available(macOS 13.0, iOS 16.0, *),
+           appPreference.sidebarLayout == .sidebar {
+
+        } else if containerHorizontalSizeClass != .compact {
+            Button {
+                layoutState.isSidebarPresented.toggle()
+            } label: {
+                Label(.localizable(.sidebarToggleName), systemSymbol: .sidebarLeft)
             }
         }
+
+        if fileState.currentActiveGroup != nil {
+            HStack {
+                NavigationBackButton()
+                title()
+                titleBarActionsMenu()
+            }
+        }
+
+        if #available(macOS 13.0, iOS 16.0, *) { } else {
+            NewFileButton()
+        }
+    }
+
+
 #if os(macOS)
+    @ToolbarContentBuilder
+    private func macOSToolPickerToolbarContent() -> some ToolbarContent {
         ToolbarItemGroup(placement: .status) {
             if #available(macOS 26.0, iOS 26.0, *) {
                 ExcalidrawToolbar()
@@ -160,8 +214,11 @@ struct ExcalidrawEditorToolbarModifier: ViewModifier {
                 ExcalidrawToolbar()
             }
         }
+    }
 #endif
-        
+
+    @ToolbarContentBuilder
+    private func sharedPrimaryActionToolbarContent() -> some ToolbarContent {
 //        ToolbarItemGroup(placement: .confirmationAction) {
         ToolbarItemGroup(placement: .primaryAction) {
             if fileState.currentActiveFile != nil {
@@ -278,7 +335,7 @@ struct ExcalidrawEditorToolbarModifier: ViewModifier {
                 fileObjectID: request.fileObjectID,
                 recoveryKey: recoveryKey
             )
-            await lockedContentState.refresh(activeFile: fileState.currentActiveFile)
+            await finishLockedFileAccess(mode: request.mode)
         } catch let unlockError as LockedContentSystemUnlockError {
             await handleSavedRecoveryKeyLockError(unlockError, request: request)
         } catch {
@@ -320,7 +377,7 @@ struct ExcalidrawEditorToolbarModifier: ViewModifier {
                 fileObjectID: request.fileObjectID,
                 recoveryKey: recoveryKey
             )
-            await lockedContentState.refresh(activeFile: fileState.currentActiveFile)
+            await finishLockedFileAccess(mode: request.mode)
         } catch {
             alertToast(error)
         }
@@ -353,6 +410,16 @@ struct ExcalidrawEditorToolbarModifier: ViewModifier {
     @MainActor
     private func relockUnlockedContent() async {
         await lockedContentState.relockCurrentSession(activeFile: fileState.currentActiveFile)
+    }
+
+    @MainActor
+    private func finishLockedFileAccess(mode: LockedFileAccessMode) async {
+        switch mode {
+            case .lock:
+                await lockedContentState.relockCurrentSession(activeFile: fileState.currentActiveFile)
+            case .unlock:
+                await lockedContentState.refresh(activeFile: fileState.currentActiveFile)
+        }
     }
 
     @MainActor

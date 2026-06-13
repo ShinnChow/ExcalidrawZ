@@ -22,29 +22,33 @@
 //     `.action {}` so TextArea inserts nothing into the text.
 //  2. The strip view (`AttachmentThumbnailStrip`) renders the
 //     side-state as little chips above the input.
-//  3. On send, every entry in the side-state is encoded as a
-//     `data:image/png;base64,...` URI and attached to the user
-//     message via `ChatMessageContent.files`.
+//  3. On send, every entry in the side-state is encoded as an
+//     AI-optimized data URI and attached to the user message via
+//     `ChatMessageContent.files`.
 //  4. From there the existing pipeline takes over: LLMKit's automatic
 //     upload provider may rewrite base64 → URL, the persistence
 //     layer's `AIChatAttachmentRepository` writes either form to
 //     iCloud-Drive-synced storage and roundtrips it on restore.
 //
-//  iOS note: TextArea's paste pipeline is currently macOS-only (per
-//  the SDK docs); the `.onPaste` handler simply doesn't fire on iOS.
-//  The code below still compiles on iOS because `PlatformImage` is a
-//  cross-platform alias and we only diverge in the rendering call.
+//  iOS note: TextArea's paste pipeline is backed by the UIKit bridge
+//  in ChocofordKit, so the same attachment path handles paste, file
+//  import, PhotosPicker, and camera captures.
 //
 
 import SwiftUI
 import ChocofordUI
 import LLMCore
 import SFSafeSymbols
+import UniformTypeIdentifiers
 
 #if canImport(AppKit)
 import AppKit
 #elseif canImport(UIKit)
 import UIKit
+#endif
+
+#if os(iOS)
+import PhotosUI
 #endif
 
 // MARK: - Side-state record
@@ -64,26 +68,12 @@ struct PendingPastedImage: Identifiable, Equatable {
 // MARK: - Encoding helpers
 
 enum PastedImageHelpers {
-    /// `PlatformImage` → `data:image/png;base64,...` URI. PNG so we
-    /// keep alpha (screenshots often have it) and don't worry about
-    /// JPEG quality knobs. The URI is the form
-    /// `ChatMessageContent.File.base64EncodedImage` carries verbatim
-    /// — LLMKit's upload provider parses the mediaType from the
-    /// prefix.
+    /// `PlatformImage` → AI-optimized data URI. Camera photos are resized and
+    /// encoded as JPEG so a pasted / captured image does not balloon into a
+    /// huge PNG payload before LLMKit's upload pipeline sees it.
     static func encodeAsDataURI(_ image: PlatformImage) -> String? {
-#if canImport(AppKit)
-        guard let tiff = image.tiffRepresentation,
-              let bitmap = NSBitmapImageRep(data: tiff),
-              let png = bitmap.representation(using: .png, properties: [:]) else {
-            return nil
-        }
-        return "data:image/png;base64,\(png.base64EncodedString())"
-#elseif canImport(UIKit)
-        guard let png = image.pngData() else { return nil }
-        return "data:image/png;base64,\(png.base64EncodedString())"
-#else
-        return nil
-#endif
+        guard let payload = AIImagePayloadOptimizer.optimize(image) else { return nil }
+        return AIImagePayloadOptimizer.dataURL(from: payload)
     }
 
     /// Build the `[File]` payload for a user message from the current
@@ -135,6 +125,80 @@ enum PastedImageHelpers {
     }
 }
 
+#if os(iOS)
+enum AIChatAttachmentImageImporter {
+    static func pendingImage(from url: URL) -> PendingPastedImage? {
+        let didStart = url.startAccessingSecurityScopedResource()
+        defer {
+            if didStart { url.stopAccessingSecurityScopedResource() }
+        }
+        guard let data = try? Data(contentsOf: url) else { return nil }
+        return pendingImage(from: data)
+    }
+
+    static func pendingImage(from data: Data) -> PendingPastedImage? {
+        guard let image = UIImage(data: data) else { return nil }
+        return PendingPastedImage(id: UUID(), image: image)
+    }
+
+    static func pendingImage(from image: UIImage) -> PendingPastedImage {
+        PendingPastedImage(id: UUID(), image: image)
+    }
+
+    static func pendingImages(from items: [PhotosPickerItem]) async -> [PendingPastedImage] {
+        var images: [PendingPastedImage] = []
+        for item in items {
+            guard let data = try? await item.loadTransferable(type: Data.self),
+                  let image = pendingImage(from: data)
+            else { continue }
+            images.append(image)
+        }
+        return images
+    }
+}
+
+struct AIChatCameraImagePicker: UIViewControllerRepresentable {
+    @Environment(\.dismiss) private var dismiss
+
+    let onImagePicked: (UIImage?) -> Void
+
+    func makeUIViewController(context: Context) -> UIImagePickerController {
+        let picker = UIImagePickerController()
+        picker.sourceType = .camera
+        picker.delegate = context.coordinator
+        return picker
+    }
+
+    func updateUIViewController(_ uiViewController: UIImagePickerController, context: Context) {}
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(parent: self)
+    }
+
+    final class Coordinator: NSObject, UINavigationControllerDelegate, UIImagePickerControllerDelegate {
+        let parent: AIChatCameraImagePicker
+
+        init(parent: AIChatCameraImagePicker) {
+            self.parent = parent
+        }
+
+        func imagePickerController(
+            _ picker: UIImagePickerController,
+            didFinishPickingMediaWithInfo info: [UIImagePickerController.InfoKey: Any]
+        ) {
+            let image = (info[.editedImage] as? UIImage) ?? (info[.originalImage] as? UIImage)
+            parent.onImagePicked(image)
+            parent.dismiss()
+        }
+
+        func imagePickerControllerDidCancel(_ picker: UIImagePickerController) {
+            parent.onImagePicked(nil)
+            parent.dismiss()
+        }
+    }
+}
+#endif
+
 extension ChatMessageContent.File {
     var isImageInput: Bool {
         switch self {
@@ -148,6 +212,77 @@ extension Array where Element == ChatMessageContent.File {
     var containsImageInput: Bool {
         contains { $0.isImageInput }
     }
+}
+
+struct AIChatImageAttachmentReference: Codable, Hashable, Sendable {
+    let id: String
+    let mimeType: String
+    let dataURL: String
+
+    static func makeReferences(
+        from files: [ChatMessageContent.File]
+    ) -> [AIChatImageAttachmentReference] {
+        files.enumerated().compactMap { index, file in
+            guard let payload = imagePayload(from: file) else { return nil }
+            return AIChatImageAttachmentReference(
+                id: "input_image_\(index + 1)",
+                mimeType: payload.mimeType,
+                dataURL: payload.dataURL
+            )
+        }
+    }
+
+    static func parseDataURL(_ value: String) -> (mimeType: String, data: Data)? {
+        guard let commaIndex = value.firstIndex(of: ",") else { return nil }
+        let header = String(value[..<commaIndex])
+        guard header.lowercased().hasPrefix("data:") else { return nil }
+        let metadata = String(header.dropFirst("data:".count))
+        let parts = metadata.split(separator: ";").map(String.init)
+        let mimeType = parts.first(where: { !$0.isEmpty && !$0.caseInsensitiveCompare("base64").isSame }) ?? "image/png"
+        guard parts.contains(where: { $0.caseInsensitiveCompare("base64").isSame }) else { return nil }
+        let payload = String(value[value.index(after: commaIndex)...])
+        guard let data = Data(base64Encoded: payload, options: .ignoreUnknownCharacters) else { return nil }
+        return (mimeType, data)
+    }
+
+    static func makeDataURL(data: Data, mimeType: String) -> String {
+        "data:\(mimeType);base64,\(data.base64EncodedString())"
+    }
+
+    private static func imagePayload(
+        from file: ChatMessageContent.File
+    ) -> (mimeType: String, dataURL: String)? {
+        switch file {
+            case .base64EncodedImage(let dataURL):
+                guard let parsed = parseDataURL(dataURL) else { return nil }
+                return (parsed.mimeType, dataURL)
+
+            case .image(let url):
+                guard url.isFileURL else { return nil }
+                let didStart = url.startAccessingSecurityScopedResource()
+                defer {
+                    if didStart { url.stopAccessingSecurityScopedResource() }
+                }
+                guard let data = try? Data(contentsOf: url) else { return nil }
+                let mimeType = mimeType(for: url)
+                return (mimeType, makeDataURL(data: data, mimeType: mimeType))
+        }
+    }
+
+    private static func mimeType(for url: URL) -> String {
+        guard !url.pathExtension.isEmpty,
+              let type = UTType(filenameExtension: url.pathExtension),
+              let mimeType = type.preferredMIMEType,
+              mimeType.lowercased().hasPrefix("image/")
+        else {
+            return "image/png"
+        }
+        return mimeType
+    }
+}
+
+private extension ComparisonResult {
+    var isSame: Bool { self == .orderedSame }
 }
 
 // MARK: - Thumbnail strip
@@ -195,10 +330,9 @@ struct AttachmentThumbnailStrip: View {
     }
 }
 
-/// Single thumbnail with its own hover state. The ✕ is hidden by
-/// default and fades in when the cursor enters the tile —
-/// mirrors ChatGPT's macOS client where attachments stay visually
-/// quiet until you reach for them.
+/// Single thumbnail with its own remove affordance. macOS keeps the
+/// button hover-revealed; iOS shows it persistently because there is no
+/// hover state and attachments need an obvious touch target.
 private struct AttachmentThumbnailTile: View {
     let entry: PendingPastedImage
     let onRemove: () -> Void
@@ -211,7 +345,7 @@ private struct AttachmentThumbnailTile: View {
     @State private var isHovering: Bool = false
 
     var body: some View {
-        ZStack(alignment: .topTrailing) {
+        ZStack(alignment: removeButtonAlignment) {
             // The image itself — rounded card, fixed square aspect.
             // Using `.scaledToFill` + clip so portrait/landscape both
             // present as a clean tile rather than letterboxing.
@@ -229,13 +363,8 @@ private struct AttachmentThumbnailTile: View {
                 .clipShape(RoundedRectangle(cornerRadius: 8))
 #endif
 
-            // ✕ delete button. Hidden until hover, then fades in.
-            // Anchored half-outside the tile so it reads as an
-            // affordance attached to the image rather than overlapping
-            // its content. `allowsHitTesting(isHovering)` ensures the
-            // invisible button doesn't swallow clicks meant for the
-            // image when hidden — important on iOS where there's no
-            // hover and we'd otherwise have a phantom hitbox.
+            // On macOS this stays hover-revealed. On iOS it is always
+            // visible and anchored to the top-left corner.
             Button(action: onRemove) {
                 Label(
                     .localizable(.aiChatButtonRemoveAttachment),
@@ -247,16 +376,57 @@ private struct AttachmentThumbnailTile: View {
                 .labelStyle(.iconOnly)
             }
             .buttonStyle(.plain)
-            .offset(x: 6, y: -6)
-            .opacity(isHovering ? 1 : 0)
-            .allowsHitTesting(isHovering)
+            .frame(width: removeButtonHitLength, height: removeButtonHitLength)
+            .offset(removeButtonOffset)
+            .opacity(removeButtonIsVisible ? 1 : 0)
+            .allowsHitTesting(removeButtonIsVisible)
             .animation(.easeInOut(duration: 0.12), value: isHovering)
             .help(.localizable(.aiChatButtonRemoveAttachment))
         }
         .padding(.top, 6)
-        .padding(.trailing, 6)
+        .padding(removeButtonHorizontalPaddingEdge, 6)
         .onHover { hovering in
             isHovering = hovering
         }
+    }
+
+    private var removeButtonIsVisible: Bool {
+#if canImport(UIKit)
+        true
+#else
+        isHovering
+#endif
+    }
+
+    private var removeButtonAlignment: Alignment {
+#if canImport(UIKit)
+        .topLeading
+#else
+        .topTrailing
+#endif
+    }
+
+    private var removeButtonOffset: CGSize {
+#if canImport(UIKit)
+        CGSize(width: -6, height: -6)
+#else
+        CGSize(width: 6, height: -6)
+#endif
+    }
+
+    private var removeButtonHitLength: CGFloat {
+#if canImport(UIKit)
+        28
+#else
+        18
+#endif
+    }
+
+    private var removeButtonHorizontalPaddingEdge: Edge.Set {
+#if canImport(UIKit)
+        .leading
+#else
+        .trailing
+#endif
     }
 }

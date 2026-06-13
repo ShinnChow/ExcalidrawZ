@@ -11,11 +11,12 @@ import LLMKit
 import LLMCore
 
 struct AISettingsView: View {
+    @Environment(\.containerHorizontalSizeClass) var containerHorizontalSizeClass
     @EnvironmentObject var llmState: LLMStateObject
     @EnvironmentObject var store: Store
     @ObservedObject var prefs = AIChatPreferences.shared
     @ObservedObject var router = SettingsRouter.shared
-
+    
     @State var selectedTab: SettingsTab = .usage
     @State var activityGrouping: ActivityGrouping = .recent
     @State var transactions: [CreditsTransaction] = []
@@ -32,16 +33,31 @@ struct AISettingsView: View {
     @State var aiUserInfoLoadError: String?
     @State var didCopyAIAccountID: Bool = false
     @State var isPresentingAIEnableConsent: Bool = false
-
-    /// Model list for the Default Model picker, sourced from the agent's
-    /// `allowedModels`. Loaded lazily on first appearance so opening
-    /// Settings doesn't pay a network cost up-front.
-    @State var availableModels: [SupportedModel] = []
-
+    
+    /// Model profile list for the Default Model picker, sourced from the
+    /// agent's server-defined `modelProfiles`.
+    @State var availableModelOptions: [ExcalidrawModelProfileOption] = []
+    
     let pageSize: Int = 20
     let aggregatePageSize: Int = 100
     let agentID = "excalidraw-canvas"
+    
+    var usesCompactSettingsLayout: Bool {
+#if os(iOS)
+        containerHorizontalSizeClass == .compact
+#else
+        false
+#endif
+    }
 
+    var usesToolbarSettingsTabs: Bool {
+#if os(iOS)
+        !usesCompactSettingsLayout
+#else
+        false
+#endif
+    }
+    
     var body: some View {
         SwiftUI.Group {
             if #available(macOS 14.0, iOS 17.0, *) {
@@ -60,8 +76,25 @@ struct AISettingsView: View {
                 .task { await loadAISettingsDataIfEnabled() }
             }
         }
-        .task {
-            consumePendingAISettingsRoute()
+#if os(iOS)
+        .toolbar {
+            if prefs.isAIEnabled {
+                if usesCompactSettingsLayout {
+                    ToolbarItemGroup(placement: .bottomBar) {
+                        bottomTabBar
+                    }
+                } else {
+                    ToolbarItemGroup(placement: .automatic) {
+                        toolbarTabBar
+                    }
+                }
+            }
+        }
+#endif
+        .sheet(isPresented: $isPresentingAIEnableConsent) {
+            AIEnableConsentSheet {
+                prefs.isAIEnabled = true
+            }
         }
         .watch(value: router.pendingAISettingsRoute) {
             consumePendingAISettingsRoute()
@@ -72,13 +105,11 @@ struct AISettingsView: View {
                 await loadAISettingsDataIfEnabled()
             }
         }
-        .sheet(isPresented: $isPresentingAIEnableConsent) {
-            AIEnableConsentSheet {
-                prefs.isAIEnabled = true
-            }
+        .task {
+            consumePendingAISettingsRoute()
         }
     }
-
+    
     @MainActor
     private func consumePendingAISettingsRoute() {
         guard let route = router.pendingAISettingsRoute else { return }
@@ -90,7 +121,7 @@ struct AISettingsView: View {
         }
         router.pendingAISettingsRoute = nil
     }
-
+    
     @MainActor
     private func loadAISettingsDataIfEnabled() async {
         guard AIChatAvailability.canUseAI else { return }
@@ -101,7 +132,7 @@ struct AISettingsView: View {
         await LLMCreditsRefreshCoordinator.shared.refreshCredits(reason: .aiSettingsAppear)
         await loadAIAccountInfoIfNeeded()
     }
-
+    
     @MainActor
     var aiEnabledBinding: Binding<Bool> {
         Binding(

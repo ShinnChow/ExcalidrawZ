@@ -20,6 +20,7 @@ private struct IOSAutoSyncModifier: ViewModifier {
     @EnvironmentObject var toolState: ToolState
     
     var activeFile: FileState.ActiveFile?
+    var activeFileLockState: FileContentLockState
     var localFileBinding: Binding<ExcalidrawFile?>
     var onUpdate: (Data) async -> Void
     
@@ -32,6 +33,13 @@ private struct IOSAutoSyncModifier: ViewModifier {
                     stopAutoSync()
                 } else {
                     startAutoSyncIfNeeded(file: file)
+                }
+            }
+            .watch(value: activeFileLockState) { lockState in
+                if lockState == .plaintext {
+                    startAutoSyncIfNeeded(file: activeFile)
+                } else {
+                    stopAutoSync()
                 }
             }
             .watch(value: toolState.inDragMode) { inDragMode in
@@ -57,6 +65,11 @@ private struct IOSAutoSyncModifier: ViewModifier {
     private func startAutoSyncIfNeeded(file activeFile: FileState.ActiveFile?) {
         // Only in read-only mode (drag mode)
         guard toolState.inDragMode else {
+            stopAutoSync()
+            return
+        }
+
+        guard activeFileLockState == .plaintext else {
             stopAutoSync()
             return
         }
@@ -87,7 +100,8 @@ private struct IOSAutoSyncModifier: ViewModifier {
                 // Wait for sync interval
                 try? await Task.sleep(for: .seconds(5))
                 
-                guard !Task.isCancelled else { break }
+                guard !Task.isCancelled,
+                      activeFileLockState == .plaintext else { break }
                 
                 do {
                     // Load latest content based on file type
@@ -124,6 +138,8 @@ private struct IOSAutoSyncModifier: ViewModifier {
                         default:
                             continue
                     }
+
+                    guard !Task.isCancelled else { break }
                     
                     let currentData = localFileBinding.wrappedValue?.content
                     
@@ -136,6 +152,7 @@ private struct IOSAutoSyncModifier: ViewModifier {
                                 status: .syncing
                             )
                             try? await Task.sleep(nanoseconds: UInt64(1e+9 * 2))
+                            guard !Task.isCancelled else { break }
                             await FileSyncCoordinator.shared.updateFileStatus(
                                 for: url,
                                 status: .downloaded
@@ -148,6 +165,7 @@ private struct IOSAutoSyncModifier: ViewModifier {
                                 )
                             }
                             try? await Task.sleep(nanoseconds: UInt64(1e+9 * 2))
+                            guard !Task.isCancelled else { break }
                             await MainActor.run {
                                 FileStatusService.shared.updateICloudStatus(
                                     fileID: fileID,
@@ -155,6 +173,8 @@ private struct IOSAutoSyncModifier: ViewModifier {
                                 )
                             }
                         }
+
+                        guard !Task.isCancelled else { break }
                         
                         await onUpdate(latestData)
                     }
@@ -187,12 +207,14 @@ extension View {
     @ViewBuilder
     func applyIOSAutoSync(
         activeFile: FileState.ActiveFile?,
+        activeFileLockState: FileContentLockState,
         localFileBinding: Binding<ExcalidrawFile?>,
         onUpdate: @escaping (Data) async -> Void
     ) -> some View {
         self.modifier(
             IOSAutoSyncModifier(
                 activeFile: activeFile,
+                activeFileLockState: activeFileLockState,
                 localFileBinding: localFileBinding,
                 onUpdate: onUpdate
             )

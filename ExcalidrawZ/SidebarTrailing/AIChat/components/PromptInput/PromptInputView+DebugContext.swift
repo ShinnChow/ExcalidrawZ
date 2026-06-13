@@ -26,6 +26,11 @@ extension PromptInputView {
         }
         .disabled(isGeneratingDebugContext)
         .help(String(localizable: .debugChatContextHelp))
+#if os(iOS)
+        .frame(minWidth: 32, minHeight: 32)
+        .contentShape(Rectangle())
+        .hoverEffect()
+#endif
     }
 
     var debugChatContextSheet: some View {
@@ -144,7 +149,10 @@ extension PromptInputView {
 
         await loadAgentConfigIfNeeded()
 
-        let model = modelForSend(files: files)
+        guard let modelOption = modelProfileOptionForSend(files: files) else {
+            throw AIChatModelProfileUnavailableError()
+        }
+        let model = modelOption.model
         let canIncludeActiveFileContext = await activeFileAllowsAIContext()
         let invocationPlan = AIChatInvocationPlan.make(
             fileState: fileState,
@@ -153,7 +161,7 @@ extension PromptInputView {
         )
         try await refreshExistingConversationToolsIfNeeded(
             conversationID: conversationID,
-            model: model,
+            supportsImageInput: modelOption.supportsImageInput,
             mode: invocationPlan.interactionMode,
             includesCurrentFileContext: invocationPlan.includesCurrentFileContext
         )

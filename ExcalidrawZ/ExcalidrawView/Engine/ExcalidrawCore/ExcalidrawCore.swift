@@ -219,6 +219,11 @@ extension ExcalidrawCore {
         var zoom: Double?
     }
 
+    struct CanvasPoint: Codable, Hashable {
+        var x: Double
+        var y: Double
+    }
+
     struct CameraAnimationOptions: Codable, Hashable {
         var animate: Bool = true
         var duration: Int = 300
@@ -888,8 +893,9 @@ extension ExcalidrawCore {
     @MainActor
     @discardableResult
     func loadLibraryItem(item: ExcalidrawLibrary) async throws -> LoadLibraryItemResult? {
+        let libraryItemsJSON = try item.libraryItems.jsonStringified()
         let raw = try await self.webView.callAsyncJavaScript(
-            "return await window.excalidrawZHelper.loadLibraryItem(\(item.jsonStringified()));",
+            "return await window.excalidrawZHelper.loadLibraryItem(\(libraryItemsJSON));",
             arguments: [:],
             contentWorld: .page
         )
@@ -909,6 +915,30 @@ extension ExcalidrawCore {
         let camera = try decodeJavaScriptResult(result, as: CameraState.self)
         cameraState = camera
         return camera
+    }
+
+    @MainActor
+    func getViewportCenter() async throws -> CanvasPoint {
+        guard !self.webView.isLoading else {
+            throw InvalidJavaScriptResult()
+        }
+        let result = try await webView.callAsyncJavaScript(
+            """
+            const api = window.excalidrawZHelper?._api;
+            if (!api) {
+                throw new Error("getViewportCenter: excalidrawAPI not ready");
+            }
+            const appState = api.getAppState();
+            const zoom = appState.zoom?.value ?? 1;
+            return JSON.stringify({
+                x: appState.width / 2 / zoom - appState.scrollX,
+                y: appState.height / 2 / zoom - appState.scrollY,
+            });
+            """,
+            arguments: [:],
+            contentWorld: .page
+        )
+        return try decodeJavaScriptResult(result, as: CanvasPoint.self)
     }
 
     @MainActor
@@ -1113,6 +1143,7 @@ extension ExcalidrawCore {
             arguments: [:],
             contentWorld: .page
         )
+        documentSyncController.scheduleProgrammaticMutationCommit(reason: "replaceAllElements")
     }
 
     @MainActor
@@ -1124,6 +1155,7 @@ extension ExcalidrawCore {
             arguments: [:],
             contentWorld: .page
         )
+        documentSyncController.scheduleProgrammaticMutationCommit(reason: "addElements")
     }
 
     @MainActor
@@ -1135,6 +1167,7 @@ extension ExcalidrawCore {
             arguments: [:],
             contentWorld: .page
         )
+        documentSyncController.scheduleProgrammaticMutationCommit(reason: "updateElements")
     }
 
     @MainActor
@@ -1146,6 +1179,7 @@ extension ExcalidrawCore {
             arguments: [:],
             contentWorld: .page
         )
+        documentSyncController.scheduleProgrammaticMutationCommit(reason: "removeElements")
     }
 
     @MainActor
@@ -1165,7 +1199,9 @@ extension ExcalidrawCore {
             arguments: [:],
             contentWorld: .page
         )
-        return try decodeJavaScriptHelperResult(result, as: MermaidInsertResult.self)
+        let insertResult = try decodeJavaScriptHelperResult(result, as: MermaidInsertResult.self)
+        documentSyncController.scheduleProgrammaticMutationCommit(reason: "insertFromMermaid")
+        return insertResult
     }
 
     @MainActor
@@ -1176,6 +1212,10 @@ extension ExcalidrawCore {
         guard !self.webView.isLoading else {
             throw InvalidJavaScriptResult()
         }
+        let mediaFiles = try resourceFiles(from: options.files)
+        if !mediaFiles.isEmpty {
+            try await insertMediaFiles(mediaFiles)
+        }
         let skeletonsJSON = try encodeJSON(skeletons)
         let optionsJSON = try encodeJSON(options)
         let result = try await webView.callAsyncJavaScript(
@@ -1185,7 +1225,18 @@ extension ExcalidrawCore {
             arguments: [:],
             contentWorld: .page
         )
-        return try decodeJavaScriptHelperResult(result, as: SkeletonInsertResult.self)
+        let insertResult = try decodeJavaScriptHelperResult(result, as: SkeletonInsertResult.self)
+        documentSyncController.scheduleProgrammaticMutationCommit(reason: "insertFromSkeleton")
+        return insertResult
+    }
+
+    private func resourceFiles(
+        from files: [String: JSONValue]?
+    ) throws -> [ExcalidrawFile.ResourceFile] {
+        guard let files, !files.isEmpty else { return [] }
+        return try files.map { fileID, value in
+            try ExcalidrawFile.ResourceFile(jsonValue: value, fallbackID: fileID)
+        }
     }
 
     @MainActor
@@ -1212,7 +1263,9 @@ extension ExcalidrawCore {
             arguments: [:],
             contentWorld: .page
         )
-        return try decodeJavaScriptHelperResult(result, as: ConnectElementsResult.self)
+        let connectResult = try decodeJavaScriptHelperResult(result, as: ConnectElementsResult.self)
+        documentSyncController.scheduleProgrammaticMutationCommit(reason: "connectElements")
+        return connectResult
     }
 
     @MainActor
@@ -1259,6 +1312,38 @@ extension ExcalidrawCore {
             arguments: [:],
             contentWorld: .page
         )
+    }
+
+    @MainActor
+    func activateHandTool() async throws {
+        guard !self.isLoading else { return }
+        let previousLastTool = self.lastTool
+        self.lastTool = .hand
+        do {
+            _ = try await webView.callAsyncJavaScript(
+                """
+                const helper = window.excalidrawZHelper;
+                if (!helper || typeof helper.toggleToolbarAction !== "function") {
+                    throw new Error("Excalidraw helper is not ready.");
+                }
+                const api = helper._api;
+                if (api && typeof api.setActiveTool === "function") {
+                    try {
+                        api.setActiveTool({ type: "hand" });
+                    } catch (_) {
+                        helper.toggleToolbarAction("H");
+                    }
+                } else {
+                    helper.toggleToolbarAction("H");
+                }
+                """,
+                arguments: [:],
+                contentWorld: .page
+            )
+        } catch {
+            self.lastTool = previousLastTool
+            throw error
+        }
     }
 
     @MainActor
@@ -1724,5 +1809,68 @@ extension ExcalidrawCore {
             arguments: [:],
             contentWorld: .page
         )
+    }
+}
+
+private extension ExcalidrawFile.ResourceFile {
+    init(
+        jsonValue: ExcalidrawCore.JSONValue,
+        fallbackID: String
+    ) throws {
+        guard case .object(let object) = jsonValue else {
+            throw ExcalidrawMediaFileDecodeError(
+                fileID: fallbackID,
+                reason: "entry is not an object"
+            )
+        }
+        guard let mimeType = object.nonEmptyString(forKey: "mimeType") else {
+            throw ExcalidrawMediaFileDecodeError(
+                fileID: fallbackID,
+                reason: "missing mimeType"
+            )
+        }
+        let id = object.nonEmptyString(forKey: "id") ?? fallbackID
+        guard id == fallbackID else {
+            throw ExcalidrawMediaFileDecodeError(
+                fileID: fallbackID,
+                reason: "entry id \(id) does not match its files key"
+            )
+        }
+        guard let dataURL = object.nonEmptyString(forKey: "dataURL") else {
+            throw ExcalidrawMediaFileDecodeError(
+                fileID: fallbackID,
+                reason: "missing dataURL"
+            )
+        }
+
+        self.init(
+            mimeType: mimeType,
+            id: id,
+            createdAt: object.millisecondDate(forKey: "created"),
+            dataURL: dataURL,
+            lastRetrievedAt: object.millisecondDate(forKey: "lastRetrieved")
+        )
+    }
+}
+
+private struct ExcalidrawMediaFileDecodeError: LocalizedError {
+    let fileID: String
+    let reason: String
+
+    var errorDescription: String? {
+        "Invalid Excalidraw media file \(fileID): \(reason)."
+    }
+}
+
+private extension Dictionary where Key == String, Value == ExcalidrawCore.JSONValue {
+    func nonEmptyString(forKey key: String) -> String? {
+        guard case .string(let value)? = self[key] else { return nil }
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
+    func millisecondDate(forKey key: String) -> Date? {
+        guard case .number(let value)? = self[key] else { return nil }
+        return Date(timeIntervalSince1970: value / 1000)
     }
 }

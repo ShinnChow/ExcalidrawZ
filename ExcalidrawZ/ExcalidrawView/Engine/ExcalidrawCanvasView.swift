@@ -22,6 +22,10 @@ struct ExcalidrawCanvasView: View {
     @EnvironmentObject var exportState: ExportState
     @EnvironmentObject var toolState: ToolState
     @EnvironmentObject var canvasPreferencesState: CanvasPreferencesState
+    @Environment(\.excalidrawNativeViewportInsets) private var nativeViewportInsets
+#if os(iOS)
+    @Environment(\.containerHorizontalSizeClass) private var containerHorizontalSizeClass
+#endif
 
     let logger = Logger(label: "ExcalidrawCanvasView")
     
@@ -112,7 +116,10 @@ struct ExcalidrawCanvasView: View {
             ) { _ in
                 let targetFile = file
                 Task {
-                    _ = await excalidrawCore.documentSyncController.load(targetFile, force: true)
+                    let outcome = await excalidrawCore.documentSyncController.load(targetFile, force: true)
+                    if outcome.didLoad {
+                        await applyLoadedFilePresentationSettings()
+                    }
                 }
             }
             .onReceive(
@@ -138,9 +145,13 @@ struct ExcalidrawCanvasView: View {
             .watch(value: appPreference.excalidrawAppearance) { _ in
                 applyColorMode()
             }
+            .watch(value: nativeViewportInsets, initial: true) { _, _ in
+                applyNativeViewportInsets()
+            }
             .watch(value: loadingState) { state in
                 if state == .loaded {
                     applyAllSettings()
+                    applyNativeViewportInsets()
                     if let file {
                         handleFileChange(file)
                     }
@@ -195,18 +206,41 @@ struct ExcalidrawCanvasView: View {
             }
 
             if !isLoading, type == .normal {
-                Task { await syncCanvasPrefsFromWeb() }
-                await MainActor.run { syncCanvasDrawingSettingsFromFile() }
+                await applyLoadedFilePresentationSettings()
             }
 
 #if os(iOS)
             if !isLoading {
-                try? await Task.sleep(nanoseconds: UInt64(1e+9 * 0.5))
-                try? await excalidrawCore.toggleToolbarAction(key: "h")
+                await enterCompactDragModeAfterLoadIfNeeded()
             }
 #endif
         }
     }
+
+#if os(iOS)
+    @MainActor
+    private func enterCompactDragModeAfterLoadIfNeeded() async {
+        guard containerHorizontalSizeClass == .compact,
+              type == .normal,
+              file != nil,
+              !toolState.inPenMode else {
+            return
+        }
+        try? await Task.sleep(nanoseconds: 500_000_000)
+        guard containerHorizontalSizeClass == .compact,
+              type == .normal,
+              file != nil,
+              !toolState.inPenMode else {
+            return
+        }
+        do {
+            try await excalidrawCore.activateHandTool()
+            toolState.setActivedTool(.hand)
+        } catch {
+            logger.warning("Failed to enter compact drag mode after load: \(error)")
+        }
+    }
+#endif
 
     /// Pull the active file's canvas preferences and reconcile our Swift mirror.
     /// Called after each canvas load so a file switch can't leave stale prefs in the UI.
@@ -280,11 +314,8 @@ struct ExcalidrawCanvasView: View {
             }
             guard isStillCurrent else { return }
 
-            if outcome.didLoad, type == .normal {
-                await syncCanvasPrefsFromWeb()
-                await MainActor.run {
-                    syncCanvasDrawingSettingsFromFile()
-                }
+            if outcome.didLoad {
+                await applyLoadedFilePresentationSettings()
             }
 
             await MainActor.run {
@@ -298,6 +329,23 @@ struct ExcalidrawCanvasView: View {
     private func applyAllSettings() {
         applyFonts()
         applyColorMode()
+    }
+
+    private func applyNativeViewportInsets() {
+        let insets = nativeViewportInsets
+        Task {
+            try? await excalidrawCore.setNativeViewportInsets(insets)
+        }
+    }
+
+    private func applyLoadedFilePresentationSettings() async {
+        await applyColorModeAsync()
+
+        guard type == .normal else { return }
+        await syncCanvasPrefsFromWeb()
+        await MainActor.run {
+            syncCanvasDrawingSettingsFromFile()
+        }
     }
     
     private func applyFonts() {
@@ -316,23 +364,30 @@ struct ExcalidrawCanvasView: View {
         colorScheme scheme: ColorScheme? = nil,
         scenePhase phase: ScenePhase? = nil
     ) {
+        Task {
+            await applyColorModeAsync(colorScheme: scheme, scenePhase: phase)
+        }
+    }
+
+    private func applyColorModeAsync(
+        colorScheme scheme: ColorScheme? = nil,
+        scenePhase phase: ScenePhase? = nil
+    ) async {
         let colorScheme = scheme ?? colorScheme
         let scenePhase = phase ?? scenePhase
         guard loadingState == .loaded, scenePhase == .active else { return }
 
-        Task {
-            do {
-                let isDark: Bool
-                if appPreference.excalidrawAppearance == .auto {
-                    isDark = colorScheme == .dark
-                } else {
-                    isDark = (appPreference.excalidrawAppearance.colorScheme ?? colorScheme) == .dark
-                }
-                self.logger.debug("Apply color mode: \(isDark ? "dark" : "light")")
-                try await excalidrawCore.changeColorMode(dark: isDark)
-            } catch {
-                onError(error)
+        do {
+            let isDark: Bool
+            if appPreference.excalidrawAppearance == .auto {
+                isDark = colorScheme == .dark
+            } else {
+                isDark = (appPreference.excalidrawAppearance.colorScheme ?? colorScheme) == .dark
             }
+            self.logger.debug("Apply color mode: \(isDark ? "dark" : "light")")
+            try await excalidrawCore.changeColorMode(dark: isDark)
+        } catch {
+            onError(error)
         }
     }
 

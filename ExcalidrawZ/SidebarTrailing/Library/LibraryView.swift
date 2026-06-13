@@ -56,14 +56,20 @@ struct LibraryView: View {
     /// consumed in `onDismiss` to trigger the file importer once the sheet has
     /// fully animated away (presenting two sheets back-to-back races otherwise).
     @State private var pendingFileImportAfterBrowser: Bool = false
+
+    private var usesInspectorToolbarChrome: Bool {
+#if os(iOS)
+        containerHorizontalSizeClass != .compact
+#else
+        appPreference.inspectorLayout == .sidebar
+#endif
+    }
     
     var body: some View {
         ZStack {
-            if #available(macOS 13.0, *), appPreference.inspectorLayout == .sidebar {
+            if #available(macOS 13.0, *), usesInspectorToolbarChrome {
                 content()
-#if os(macOS)
                     .toolbar(content: toolbar)
-#endif
                     .presentationDetents([.medium])
             } else {
                 VStack(spacing: 0) {
@@ -152,25 +158,29 @@ struct LibraryView: View {
         }
     }
 
-#if os(macOS)
-    @available(macOS 13.0, *)
     @MainActor @ToolbarContentBuilder
     private func toolbar() -> some ToolbarContent {
         if layoutState.isInspectorPresented {
+#if os(iOS)
+            if containerHorizontalSizeClass != .compact {
+                ToolbarItemGroup(placement: .topBarLeading) {
+                    selectionModeToolbarButton
+                }
+
+                InspectorHeaderToolbar(
+                    title: String(localizable: .librariesTitle),
+                    isInspectorPresented: layoutState.isInspectorPresented
+                )
+
+                ToolbarItemGroup(placement: .automatic) {
+                    removeSelectionsToolbarButton
+                    libraryOptionsToolbarMenu
+                }
+            }
+#elseif os(macOS)
             if #available(macOS 26.0, *) {
                 ToolbarItemGroup(placement: .destructiveAction) {
-                    if !libraries.isEmpty {
-                        Button {
-                            inSelectionMode.toggle()
-                            if !inSelectionMode { selectedItems.removeAll() }
-                        } label: {
-                            Label(
-                                .localizable(inSelectionMode ? .librariesButtonSelectCancel : .librariesButtonSelect),
-                                systemSymbol: inSelectionMode ? .xmark : .checklist
-                            )
-                        }
-                    }
-                    
+                    selectionModeToolbarButton
                 }
                 
                 // This work...
@@ -189,27 +199,60 @@ struct LibraryView: View {
             
             if #available(macOS 26.0, *) {
                 ToolbarItemGroup(placement: .automatic) {
-                    if inSelectionMode {
-                        Button(role: .destructive) {
-                            isRemoveSelectionsConfirmationPresented.toggle()
-                        } label: {
-                            Label(.localizable(.librariesButtonRemoveSelections), systemSymbol: .trash)
-                        }
-                        .disabled(selectedItems.isEmpty)
-                    }
-                    
-                    Menu {
-                        bottomBarMenuItems()
-                            .labelStyle(.titleAndIcon)
-                    } label: {
-                        Label(.localizable(.librariesButtonLibraryOptions), systemSymbol: .ellipsis)
-                    }
-                    .menuIndicator(.hidden)
+                    removeSelectionsToolbarButton
+                    libraryOptionsToolbarMenu
                 }
             }
+#endif
         }
     }
+
+    @ViewBuilder
+    private var selectionModeToolbarButton: some View {
+        if !libraries.isEmpty {
+            Button {
+                inSelectionMode.toggle()
+                if !inSelectionMode { selectedItems.removeAll() }
+            } label: {
+                Label(
+                    .localizable(inSelectionMode ? .librariesButtonSelectCancel : .librariesButtonSelect),
+                    systemSymbol: inSelectionMode ? .xmark : .checklist
+                )
+            }
+#if os(iOS)
+            .hoverEffect()
 #endif
+        }
+    }
+
+    @ViewBuilder
+    private var removeSelectionsToolbarButton: some View {
+        if inSelectionMode {
+            Button(role: .destructive) {
+                isRemoveSelectionsConfirmationPresented.toggle()
+            } label: {
+                Label(.localizable(.librariesButtonRemoveSelections), systemSymbol: .trash)
+            }
+            .disabled(selectedItems.isEmpty)
+#if os(iOS)
+            .hoverEffect()
+#endif
+        }
+    }
+
+    @ViewBuilder
+    private var libraryOptionsToolbarMenu: some View {
+        Menu {
+            bottomBarMenuItems()
+                .labelStyle(.titleAndIcon)
+        } label: {
+            Label(.localizable(.librariesButtonLibraryOptions), systemSymbol: .ellipsis)
+        }
+        .menuIndicator(.hidden)
+#if os(iOS)
+        .hoverEffect()
+#endif
+    }
 
     @ViewBuilder
     private func content() -> some View {
