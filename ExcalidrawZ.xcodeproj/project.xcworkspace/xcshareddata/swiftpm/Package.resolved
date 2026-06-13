@@ -1,5 +1,5 @@
 {
-  "originHash" : "6fb53d7a60c76a58721520a172eff999048826309833b224dbf1802e017d24c5",
+  "originHash" : "15a6184b2b4ee2dfee2534d7fa65b2d369b4a1a19f72473c915a1311ae390dc1",
   "pins" : [
     {
       "identity" : "alerttoast",
@@ -17,6 +17,15 @@
       "state" : {
         "revision" : "862808b2070cd908cb04f9aafe7de83d35f81b05",
         "version" : "0.6.7"
+      }
+    },
+    {
+      "identity" : "chocofordkit",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/chocoford/ChocofordKit.git",
+      "state" : {
+        "branch" : "main",
+        "revision" : "bbf92c4411803a322c7fca95782449186e23c2df"
       }
     },
     {
@@ -61,7 +70,7 @@
       "location" : "https://github.com/chocoford/LLMKit.git",
       "state" : {
         "branch" : "dev",
-        "revision" : "ab067a199929f73ab6e8ae167ade53b29d080b09"
+        "revision" : "ce8eb346dbbacac107965015b409a4a67d875038"
       }
     },
     {
