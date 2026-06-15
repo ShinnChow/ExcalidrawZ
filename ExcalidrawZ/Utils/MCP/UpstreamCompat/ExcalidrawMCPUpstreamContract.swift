@@ -20,6 +20,13 @@ enum ExcalidrawMCPUpstreamContract {
     static let upstreamRepository = "excalidraw/excalidraw-mcp"
     static let upstreamBranch = "main"
     static let upstreamServerPath = "src/server.ts"
+    static let upstreamManifestPath = "manifest.json"
+    static let upstreamPackagePath = "package.json"
+
+    /// Mirrors upstream manifest/package metadata inspected by the drift check.
+    static let upstreamPackageName = "@mcp-demos/excalidraw-server"
+    static let upstreamAppName = "excalidraw-mcp-app"
+    static let upstreamVersion = "0.3.2"
 
     /// Mirrors upstream's current element/data string limit.
     static let maxInputBytes = 5 * 1024 * 1024
