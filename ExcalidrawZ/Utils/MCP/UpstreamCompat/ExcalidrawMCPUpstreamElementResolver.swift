@@ -74,7 +74,7 @@ struct ExcalidrawMCPUpstreamElementResolver {
 
             let ratio = width / height
             if abs(ratio - 4.0 / 3.0) > 0.15 {
-                return "Tip: cameraUpdate used \(Int(width))x\(Int(height)); prefer a 4:3 viewport such as 400x300, 800x600, or 1200x900."
+                return "Tip: your cameraUpdate used \(Int(width))x\(Int(height)) — try to stick with 4:3 aspect ratio (e.g. 400x300, 800x600) in future."
             }
         }
         return nil

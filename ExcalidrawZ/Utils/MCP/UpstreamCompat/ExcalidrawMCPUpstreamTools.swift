@@ -98,7 +98,7 @@ enum ExcalidrawMCPToolSchemas {
             "elements": .object([
                 "type": .string("string"),
                 "description": .string(
-                    "JSON array string of Excalidraw elements. Must be valid JSON; no comments or trailing commas. Keep compact. Call read_me first for format reference."
+                    "JSON array string of Excalidraw elements. Must be valid JSON — no comments, no trailing commas. Keep compact.\nCall read_me first for format reference."
                 )
             ])
         ]),
@@ -133,19 +133,6 @@ enum ExcalidrawMCPUpstreamToolCatalog {
             title: "Draw Diagram",
             description: "Renders a hand-drawn diagram using Excalidraw elements. Elements stream in one by one with draw-on animations. Call read_me first to learn the element format.",
             inputSchema: ExcalidrawMCPToolSchemas.createView,
-            annotations: ["readOnlyHint": .bool(true)]
-        ),
-        ExcalidrawMCPTool(
-            name: ExcalidrawMCPUpstreamContract.ToolName.saveCheckpoint,
-            title: "Save Checkpoint",
-            description: "Saves the current MCP diagram state and returns a checkpoint id.",
-            inputSchema: ExcalidrawMCPToolSchemas.emptyObject
-        ),
-        ExcalidrawMCPTool(
-            name: ExcalidrawMCPUpstreamContract.ToolName.readCheckpoint,
-            title: "Read Checkpoint",
-            description: "Reads a previously saved MCP diagram checkpoint as an elements JSON string.",
-            inputSchema: ExcalidrawMCPToolSchemas.checkpointID,
             annotations: ["readOnlyHint": .bool(true)]
         )
     ]
