@@ -765,19 +765,52 @@ func flatFiles(in directory: URL) throws -> [URL] {
     return files
 }
 
-// MARK: - Base64 Data URL Utilities
+// MARK: - Data URL Utilities
 
-/// Decode base64 data from a data URL string
-/// - Parameter dataURL: Data URL string in format "data:<mime-type>;base64,<base64-data>"
-/// - Returns: Decoded Data, or nil if decoding fails
-func decodeBase64FromDataURL(_ dataURL: String) -> Data? {
-    // Split by "base64," to get the base64 part
-    guard let base64String = dataURL.components(separatedBy: "base64,").last else {
+struct DecodedDataURL {
+    var mimeType: String
+    var data: Data
+}
+
+/// Decode data from a data URL string.
+///
+/// Supports both `data:<mime>;base64,...` and valid non-base64 data URLs such
+/// as `data:image/svg+xml;charset=utf-8,%3Csvg...`.
+func decodeDataURL(_ dataURL: String) -> DecodedDataURL? {
+    guard dataURL.hasPrefix("data:") else {
         return nil
     }
 
-    // Decode base64 string to Data
-    return Data(base64Encoded: base64String, options: [.ignoreUnknownCharacters])
+    let body = dataURL.dropFirst(5)
+    guard let commaIndex = body.firstIndex(of: ",") else {
+        return nil
+    }
+
+    let header = String(body[..<commaIndex])
+    let payload = String(body[body.index(after: commaIndex)...])
+    let headerParts = header.split(separator: ";", omittingEmptySubsequences: false)
+        .map(String.init)
+    let mimeType = headerParts.first?.nilIfBlank ?? "application/octet-stream"
+    let isBase64 = headerParts.dropFirst().contains {
+        $0.caseInsensitiveCompare("base64") == .orderedSame
+    }
+
+    let data: Data?
+    if isBase64 {
+        data = Data(base64Encoded: payload, options: [.ignoreUnknownCharacters])
+    } else {
+        data = (payload.removingPercentEncoding ?? payload).data(using: .utf8)
+    }
+
+    guard let data else { return nil }
+    return DecodedDataURL(mimeType: mimeType, data: data)
+}
+
+/// Decode data from a data URL string.
+///
+/// Kept for older call sites that originally only accepted base64 data URLs.
+func decodeBase64FromDataURL(_ dataURL: String) -> Data? {
+    decodeDataURL(dataURL)?.data
 }
 
 /// Decode base64 data from a raw base64 string
@@ -785,4 +818,11 @@ func decodeBase64FromDataURL(_ dataURL: String) -> Data? {
 /// - Returns: Decoded Data, or nil if decoding fails
 func decodeBase64(_ base64String: String) -> Data? {
     return Data(base64Encoded: base64String, options: [.ignoreUnknownCharacters])
+}
+
+private extension String {
+    var nilIfBlank: String? {
+        let trimmed = trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
+    }
 }

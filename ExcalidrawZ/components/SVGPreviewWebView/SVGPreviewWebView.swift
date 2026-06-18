@@ -9,6 +9,14 @@ import SwiftUI
 import WebKit
 import Logging
 
+#if canImport(AppKit)
+import AppKit
+private typealias SVGPreviewPlatformColor = NSColor
+#elseif canImport(UIKit)
+import UIKit
+private typealias SVGPreviewPlatformColor = UIColor
+#endif
+
 private let svgPreviewLogger = Logger(label: "SVGPreviewWebView")
 
 #if DEV
@@ -30,7 +38,57 @@ struct SVGPreviewView: View {
     
     var body: some View {
         SVGPreviewWebView(svg: svgContent, contentSize: $webViewSize)
-            .frame(width: webViewSize.width, height: webViewSize.height)
+            .frame(width: max(webViewSize.width, 1), height: max(webViewSize.height, 1))
+    }
+}
+
+struct FittedSVGPreviewView: View {
+    var svgContent: String
+    var minimumScale: CGFloat
+    var maximumScale: CGFloat
+    var padding: CGFloat
+
+    @State private var webViewSize: CGSize = .zero
+
+    init(
+        svg: String,
+        minimumScale: CGFloat = 0.2,
+        maximumScale: CGFloat = 8,
+        padding: CGFloat = 16
+    ) {
+        self.svgContent = svg
+        self.minimumScale = minimumScale
+        self.maximumScale = maximumScale
+        self.padding = padding
+    }
+
+    var body: some View {
+        GeometryReader { proxy in
+            let contentSize = safeContentSize
+            let scale = scale(for: proxy.size)
+
+            SVGPreviewWebView(svg: svgContent, contentSize: $webViewSize)
+                .frame(width: contentSize.width, height: contentSize.height)
+                .scaleEffect(scale)
+                .frame(width: proxy.size.width, height: proxy.size.height)
+        }
+    }
+
+    private var safeContentSize: CGSize {
+        CGSize(width: max(webViewSize.width, 1), height: max(webViewSize.height, 1))
+    }
+
+    private func scale(for containerSize: CGSize) -> CGFloat {
+        let contentSize = safeContentSize
+        let availableWidth = max(containerSize.width - padding * 2, 1)
+        let availableHeight = max(containerSize.height - padding * 2, 1)
+        let fitScale = min(availableWidth / contentSize.width, availableHeight / contentSize.height)
+
+        guard fitScale.isFinite, fitScale > 0 else {
+            return 1
+        }
+
+        return min(max(fitScale, minimumScale), maximumScale)
     }
 }
 
@@ -86,6 +144,7 @@ extension SVGPreviewWebView {
     
     func makePlatformView(context: Context) -> WKWebView {
         let webView = WKWebView()
+        configureTransparentBackground(for: webView)
         if #available(macOS 13.3, iOS 16.4, *) {
             webView.isInspectable = true
         }
@@ -96,6 +155,7 @@ extension SVGPreviewWebView {
     
     func updatePlatformView(_ webView: WKWebView, context: Context) {
         DispatchQueue.main.async {
+            configureTransparentBackground(for: webView)
             loadSVG(in: webView)
         }
     }
@@ -133,6 +193,21 @@ extension SVGPreviewWebView {
                 }
             }
         }
+    }
+
+    private func configureTransparentBackground(for webView: WKWebView) {
+        if #available(macOS 12.0, iOS 15.0, *) {
+            webView.underPageBackgroundColor = SVGPreviewPlatformColor.clear
+        }
+
+#if canImport(UIKit)
+        webView.isOpaque = false
+        webView.backgroundColor = .clear
+        webView.scrollView.backgroundColor = .clear
+#elseif canImport(AppKit)
+        webView.wantsLayer = true
+        webView.layer?.backgroundColor = SVGPreviewPlatformColor.clear.cgColor
+#endif
     }
 }
 

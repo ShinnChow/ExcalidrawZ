@@ -164,7 +164,7 @@ struct MathInputSheetViewModifier: ViewModifier {
                                 params: renderedSVG.mathImageParams,
                                 options: .init(
                                     position: .auto,
-                                    focus: .enabled(true),
+                                    focus: .mode(.center),
                                     captureUpdate: .immediately
                                 )
                             )
@@ -233,7 +233,7 @@ struct MathImageEditSheetViewModifier: ViewModifier {
                                 elementId: request.elementId,
                                 params: renderedSVG.mathImageParams,
                                 options: .init(
-                                    focus: .enabled(true),
+                                    focus: .enabled(false),
                                     captureUpdate: .immediately
                                 )
                             )
@@ -278,7 +278,6 @@ struct MathInputSheetView: View {
     @State private var selectedSVGColor: String
     
     @State private var svgContent: LatexMathSVGRenderer.RenderedSVG?
-    @State private var previewSVGURL: URL?
     
     @State private var error: Error?
 
@@ -349,7 +348,7 @@ struct MathInputSheetView: View {
         }
         .padding(20)
 #if os(macOS)
-        .frame(width: 460)
+        .frame(width: 480)
 #endif
         .onChange(of: inputText, debounce: 0.2) { newValue in
             generatePreview(input: newValue)
@@ -414,11 +413,11 @@ struct MathInputSheetView: View {
                 .multilineTextAlignment(.center)
                 .foregroundStyle(.red)
                 .padding()
-        } else if let previewSVGURL {
+        } else if let svgContent {
             if canvasColorScheme == .light {
-                SVGPreviewView(svgURL: previewSVGURL)
+                FittedSVGPreviewView(svg: svgContent.svg, maximumScale: 8, padding: 18)
             } else {
-                SVGPreviewView(svgURL: previewSVGURL)
+                FittedSVGPreviewView(svg: svgContent.svg, maximumScale: 8, padding: 18)
                     .colorInvert()
                     .hueRotation(.degrees(180))
             }
@@ -438,7 +437,6 @@ struct MathInputSheetView: View {
         self.error = nil
         guard !input.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             self.svgContent = nil
-            self.previewSVGURL = nil
             return
         }
 
@@ -447,20 +445,12 @@ struct MathInputSheetView: View {
                 from: input,
                 foregroundColor: selectedSVGColor
             )
-            let tempDir = FileManager.default.temporaryDirectory
-            let svgFilename = "\(UUID()).svg"
-            
-            let svgURL = tempDir.appendingPathComponent(svgFilename, conformingTo: .svg)
-            try renderedSVG.svg.data(using: .utf8)?.write(to: svgURL)
-            
             self.svgContent = renderedSVG
-            self.previewSVGURL = svgURL
         }
         catch {
             logger.error("[MathInputSheetView] error: \(error)")
             self.error = error
             self.svgContent = nil
-            self.previewSVGURL = nil
         }
     }
 

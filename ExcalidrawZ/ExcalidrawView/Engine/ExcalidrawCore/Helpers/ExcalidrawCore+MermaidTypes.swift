@@ -69,12 +69,15 @@ extension ExcalidrawCore {
 
     enum MermaidFocus: Codable, Hashable {
         case enabled(Bool)
+        case mode(MermaidFocusMode)
         case options(MermaidFocusOptions)
 
         init(from decoder: Decoder) throws {
             let container = try decoder.singleValueContainer()
             if let enabled = try? container.decode(Bool.self) {
                 self = .enabled(enabled)
+            } else if let mode = try? container.decode(MermaidFocusMode.self) {
+                self = .mode(mode)
             } else {
                 self = .options(try container.decode(MermaidFocusOptions.self))
             }
@@ -85,16 +88,35 @@ extension ExcalidrawCore {
             switch self {
                 case .enabled(let value):
                     try container.encode(value)
+                case .mode(let value):
+                    try container.encode(value)
                 case .options(let value):
                     try container.encode(value)
             }
         }
     }
 
+    enum MermaidFocusMode: String, Codable, Hashable {
+        case center
+        case fitContent
+        case fitViewport
+    }
+
+    struct MermaidCanvasOffsets: Codable, Hashable {
+        var top: Double?
+        var right: Double?
+        var bottom: Double?
+        var left: Double?
+    }
+
     struct MermaidFocusOptions: Codable, Hashable {
+        var mode: MermaidFocusMode?
         var animate: Bool?
         var duration: Int?
         var viewportZoomFactor: Double?
+        var minZoom: Double?
+        var maxZoom: Double?
+        var canvasOffsets: MermaidCanvasOffsets?
     }
 
     struct MermaidInsertOptions: Codable, Hashable {
