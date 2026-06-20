@@ -44,66 +44,76 @@ struct SVGPreviewView: View {
 
 struct FittedSVGPreviewView: View {
     var svgContent: String
-    var minimumScale: CGFloat
-    var maximumScale: CGFloat
     var padding: CGFloat
-
-    @State private var webViewSize: CGSize = .zero
+    var cssFilter: String?
+    var backgroundColor: String?
+    var backgroundFilter: String?
 
     init(
         svg: String,
-        minimumScale: CGFloat = 0.2,
-        maximumScale: CGFloat = 8,
-        padding: CGFloat = 16
+        padding: CGFloat = 16,
+        cssFilter: String? = nil,
+        backgroundColor: String? = nil,
+        backgroundFilter: String? = nil
     ) {
         self.svgContent = svg
-        self.minimumScale = minimumScale
-        self.maximumScale = maximumScale
         self.padding = padding
+        self.cssFilter = cssFilter
+        self.backgroundColor = backgroundColor
+        self.backgroundFilter = backgroundFilter
     }
 
     var body: some View {
         GeometryReader { proxy in
-            let contentSize = safeContentSize
-            let scale = scale(for: proxy.size)
-
-            SVGPreviewWebView(svg: svgContent, contentSize: $webViewSize)
-                .frame(width: contentSize.width, height: contentSize.height)
-                .scaleEffect(scale)
-                .frame(width: proxy.size.width, height: proxy.size.height)
+            SVGPreviewWebView(
+                svg: svgContent,
+                contentSize: .constant(.zero),
+                fitsContainer: true,
+                padding: padding,
+                cssFilter: cssFilter,
+                backgroundColor: backgroundColor,
+                backgroundFilter: backgroundFilter
+            )
+            .frame(width: proxy.size.width, height: proxy.size.height)
         }
-    }
-
-    private var safeContentSize: CGSize {
-        CGSize(width: max(webViewSize.width, 1), height: max(webViewSize.height, 1))
-    }
-
-    private func scale(for containerSize: CGSize) -> CGFloat {
-        let contentSize = safeContentSize
-        let availableWidth = max(containerSize.width - padding * 2, 1)
-        let availableHeight = max(containerSize.height - padding * 2, 1)
-        let fitScale = min(availableWidth / contentSize.width, availableHeight / contentSize.height)
-
-        guard fitScale.isFinite, fitScale > 0 else {
-            return 1
-        }
-
-        return min(max(fitScale, minimumScale), maximumScale)
     }
 }
 
 struct SVGPreviewWebView {
     var svgURL: URL?
     var svgContent: String?
+    var fitsContainer: Bool
+    var padding: CGFloat
+    var cssFilter: String?
+    var backgroundColor: String?
+    var backgroundFilter: String?
     @Binding private var contentSize: CGSize
 
     init(svgURL: URL, contentSize: Binding<CGSize>) {
         self.svgURL = svgURL
+        self.fitsContainer = false
+        self.padding = 0
+        self.cssFilter = nil
+        self.backgroundColor = nil
+        self.backgroundFilter = nil
         self._contentSize = contentSize
     }
     
-    init(svg: String, contentSize: Binding<CGSize>) {
+    init(
+        svg: String,
+        contentSize: Binding<CGSize>,
+        fitsContainer: Bool = false,
+        padding: CGFloat = 0,
+        cssFilter: String? = nil,
+        backgroundColor: String? = nil,
+        backgroundFilter: String? = nil
+    ) {
         self.svgContent = svg
+        self.fitsContainer = fitsContainer
+        self.padding = padding
+        self.cssFilter = cssFilter
+        self.backgroundColor = backgroundColor
+        self.backgroundFilter = backgroundFilter
         self._contentSize = contentSize
     }
 }
@@ -132,31 +142,166 @@ extension SVGPreviewWebView: UIViewRepresentable {
 
 
 extension SVGPreviewWebView {
-    private func loadSVG(in webView: WKWebView) {
-        if let svgContent = svgContent, let data = svgContent.data(using: .utf8) {
+    private var loadSignature: String {
+        let sourceSignature: String
+        if let svgContent {
+            sourceSignature = "svg:\(svgContent.count):\(svgContent.hashValue)"
+        } else if let svgURL {
+            sourceSignature = "url:\(svgURL.path)"
+        } else {
+            sourceSignature = "empty"
+        }
+        return "\(sourceSignature)|fits:\(fitsContainer)|padding:\(padding)|filter:\(cssFilter ?? "none")|background:\(backgroundColor ?? "none")|backgroundFilter:\(backgroundFilter ?? "none")"
+    }
+
+    private func loadSVG(in webView: WKWebView, context: Context, force: Bool = false) {
+        let signature = loadSignature
+        guard force || context.coordinator.lastLoadedSignature != signature else {
+            return
+        }
+
+        if !force,
+           fitsContainer,
+           let svgContent,
+           context.coordinator.hasFinishedNavigation {
+            context.coordinator.lastLoadedSignature = signature
+            updateFittedSVG(svgContent, in: webView)
+            return
+        }
+
+        context.coordinator.lastLoadedSignature = signature
+        context.coordinator.hasFinishedNavigation = false
+
+        if let svgContent = svgContent, fitsContainer {
+            webView.loadHTMLString(fittedHTML(svg: svgContent), baseURL: URL(string: "about:blank")!)
+        } else if let svgContent = svgContent, let data = svgContent.data(using: .utf8) {
             // 直接加载 svg 数据，mimeType 为 image/svg+xml
             webView.load(data, mimeType: "image/svg+xml", characterEncodingName: "utf-8", baseURL: URL(string: "about:blank")!)
         } else if let svgURL = svgURL {
             webView.loadFileURL(svgURL, allowingReadAccessTo: svgURL.deletingLastPathComponent())
         }
     }
+
+    private func updateFittedSVG(_ svg: String, in webView: WKWebView) {
+        let svgLiteral = javaScriptStringLiteral(svg)
+        let filterLiteral = javaScriptStringLiteral(cssFilter ?? "none")
+        let backgroundColorLiteral = javaScriptStringLiteral(backgroundColor ?? "transparent")
+        let backgroundFilterLiteral = javaScriptStringLiteral(backgroundFilter ?? "none")
+        let script = """
+        (() => {
+            document.body.style.padding = "\(padding)px";
+            document.body.innerHTML = "";
+
+            const background = document.createElement("div");
+            background.id = "svg-preview-background";
+            background.style.position = "fixed";
+            background.style.inset = "0";
+            background.style.pointerEvents = "none";
+            background.style.background = \(backgroundColorLiteral);
+            background.style.filter = \(backgroundFilterLiteral);
+            background.style.zIndex = "0";
+            document.body.appendChild(background);
+
+            const wrapper = document.createElement("div");
+            wrapper.innerHTML = \(svgLiteral);
+            const svg = wrapper.querySelector("svg");
+            if (!svg) {
+                return false;
+            }
+            document.body.appendChild(svg);
+            svg.style.display = "block";
+            svg.style.width = "100%";
+            svg.style.height = "100%";
+            svg.style.overflow = "visible";
+            svg.style.filter = \(filterLiteral);
+            svg.style.position = "relative";
+            svg.style.zIndex = "1";
+            return true;
+        })();
+        """
+
+        webView.evaluateJavaScript(script) { _, error in
+            if let error {
+                svgPreviewLogger.warning("Failed to update fitted SVG preview JavaScript: \(error)")
+            }
+        }
+    }
+
+    private func javaScriptStringLiteral(_ string: String) -> String {
+        guard let data = try? JSONEncoder().encode(string),
+              let literal = String(data: data, encoding: .utf8) else {
+            return "\"\""
+        }
+        return literal
+    }
+
+    private func fittedHTML(svg: String) -> String {
+        let cssFilter = cssFilter ?? "none"
+        let backgroundColor = backgroundColor ?? "transparent"
+        let backgroundFilter = backgroundFilter ?? "none"
+        return """
+        <!doctype html>
+        <html>
+        <head>
+            <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+            <style>
+                html, body {
+                    width: 100%;
+                    height: 100%;
+                    margin: 0;
+                    padding: 0;
+                    overflow: hidden;
+                    background: transparent;
+                }
+                body {
+                    box-sizing: border-box;
+                    padding: \(padding)px;
+                }
+                #svg-preview-background {
+                    position: fixed;
+                    inset: 0;
+                    pointer-events: none;
+                    background: \(backgroundColor);
+                    filter: \(backgroundFilter);
+                    z-index: 0;
+                }
+                svg {
+                    display: block;
+                    width: 100%;
+                    height: 100%;
+                    overflow: visible;
+                    filter: \(cssFilter);
+                    position: relative;
+                    z-index: 1;
+                }
+            </style>
+        </head>
+        <body>
+            <div id="svg-preview-background"></div>
+            \(svg)
+        </body>
+        </html>
+        """
+    }
     
     
     func makePlatformView(context: Context) -> WKWebView {
         let webView = WKWebView()
         configureTransparentBackground(for: webView)
+        configureScrolling(for: webView)
         if #available(macOS 13.3, iOS 16.4, *) {
             webView.isInspectable = true
         }
         webView.navigationDelegate = context.coordinator
-        loadSVG(in: webView)
+        loadSVG(in: webView, context: context, force: true)
         return webView
     }
     
     func updatePlatformView(_ webView: WKWebView, context: Context) {
         DispatchQueue.main.async {
             configureTransparentBackground(for: webView)
-            loadSVG(in: webView)
+            configureScrolling(for: webView)
+            loadSVG(in: webView, context: context)
         }
     }
     
@@ -166,12 +311,15 @@ extension SVGPreviewWebView {
     
     class Coordinator: NSObject, WKNavigationDelegate {
         @Binding var contentSize: CGSize
+        var lastLoadedSignature: String?
+        var hasFinishedNavigation = false
         
         init(contentSize: Binding<CGSize>) {
             self._contentSize = contentSize
         }
         
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+            hasFinishedNavigation = true
             // 通过 JS 获取 svg 的尺寸
             let js = """
                 (function() {
@@ -207,6 +355,15 @@ extension SVGPreviewWebView {
 #elseif canImport(AppKit)
         webView.wantsLayer = true
         webView.layer?.backgroundColor = SVGPreviewPlatformColor.clear.cgColor
+#endif
+    }
+
+    private func configureScrolling(for webView: WKWebView) {
+#if canImport(UIKit)
+        webView.scrollView.isScrollEnabled = false
+        webView.scrollView.bounces = false
+        webView.scrollView.showsHorizontalScrollIndicator = false
+        webView.scrollView.showsVerticalScrollIndicator = false
 #endif
     }
 }

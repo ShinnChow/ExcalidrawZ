@@ -115,8 +115,8 @@ enum ExcalidrawCanvasActionApplier {
                         try await cameraDirector.submitInsertedContentBounds(makeRect(from: insertResult.bounds))
 
                     case .insertLatex(let op):
-                        let renderedSVG = try LatexMathSVGRenderer.render(
-                            from: op.latex,
+                        let renderedSVG = try await MathRenderService.shared.renderLatex(
+                            op.latex,
                             foregroundColor: op.color
                         )
                         LatexMathSVGRenderer.debugPrintSVGBeforeInsert(renderedSVG.svg, source: "adjust_elements")
