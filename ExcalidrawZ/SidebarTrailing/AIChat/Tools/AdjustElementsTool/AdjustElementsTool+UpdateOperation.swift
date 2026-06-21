@@ -206,8 +206,31 @@ extension AdjustElementsMiddleware {
                 bump(&item.version, &item.versionNonce, &item.updated)
                 newElements[targetIndex] = .arrow(item)
 
+            case .image(var item):
+                if patch.text != nil || patch.label != nil || patch.containerId != nil {
+                    throw AdjustmentError(message: "Images accept only bounds/style patches.")
+                }
+                applyBoundsPatch(&item.x, &item.y, &item.width, &item.height, patch.bounds)
+                let imageStylePatch = patch.stylePreset == nil ? patch.style : stylePatch
+                applyCommonStylePatch(
+                    strokeColor: &item.strokeColor,
+                    backgroundColor: &item.backgroundColor,
+                    strokeWidth: &item.strokeWidth,
+                    roughness: &item.roughness,
+                    opacity: &item.opacity,
+                    style: imageStylePatch
+                )
+                if let locked = patch.locked {
+                    item.locked = locked
+                }
+                if let link = patch.link {
+                    item.link = link
+                }
+                bump(&item.version, &item.versionNonce, &item.updated)
+                newElements[targetIndex] = .image(item)
+
             default:
-                throw AdjustmentError(message: "Patch only supports text, rectangle, ellipse, diamond, line, and arrow.")
+                throw AdjustmentError(message: "Patch only supports text, rectangle, ellipse, diamond, line, arrow, and image elements.")
         }
 
         return PatchResult(elements: newElements, touchedParentIDs: touchedParents)

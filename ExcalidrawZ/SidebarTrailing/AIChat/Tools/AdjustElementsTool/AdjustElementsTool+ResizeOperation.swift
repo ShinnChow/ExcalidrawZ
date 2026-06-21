@@ -50,8 +50,13 @@ extension AdjustElementsMiddleware {
                 item.height = newH
                 bump(&item.version, &item.versionNonce, &item.updated)
                 return .arrow(item)
+            case .image(var item):
+                item.width = resolvedDimension(current: item.width, absolute: op.width, delta: op.dw)
+                item.height = resolvedDimension(current: item.height, absolute: op.height, delta: op.dh)
+                bump(&item.version, &item.versionNonce, &item.updated)
+                return .image(item)
             default:
-                throw AdjustmentError(message: "Resize only supports text, rectangle, ellipse, diamond, line, and arrow.")
+                throw AdjustmentError(message: "Resize only supports text, rectangle, ellipse, diamond, line, arrow, and image elements.")
         }
     }
 

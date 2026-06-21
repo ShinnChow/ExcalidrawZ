@@ -274,11 +274,19 @@ final class LatexMathWebRenderer: NSObject {
                         }
 
                         svgElement.setAttribute("xmlns", "http://www.w3.org/2000/svg");
+                        const width = this.pixelLength(svgElement.getAttribute("width"));
+                        const height = this.pixelLength(svgElement.getAttribute("height"));
+                        if (width !== null) {
+                            svgElement.setAttribute("width", `${width}px`);
+                        }
+                        if (height !== null) {
+                            svgElement.setAttribute("height", `${height}px`);
+                        }
 
                         return {
                             svg: new XMLSerializer().serializeToString(svgElement),
-                            width: this.pixelLength(svgElement.getAttribute("width")),
-                            height: this.pixelLength(svgElement.getAttribute("height"))
+                            width,
+                            height
                         };
                     },
 
@@ -286,8 +294,25 @@ final class LatexMathWebRenderer: NSObject {
                         if (!value) {
                             return null;
                         }
-                        const match = String(value).trim().match(/^([0-9]+(?:\\.[0-9]+)?)(px)?$/);
-                        return match ? Number(match[1]) : null;
+                        const match = String(value).trim().match(/^([0-9]+(?:\\.[0-9]+)?)(px|em|ex|pt)?$/i);
+                        if (!match) {
+                            return null;
+                        }
+
+                        const number = Number(match[1]);
+                        const unit = (match[2] || "px").toLowerCase();
+                        switch (unit) {
+                            case "px":
+                                return number;
+                            case "em":
+                                return number * 16;
+                            case "ex":
+                                return number * 8;
+                            case "pt":
+                                return number * 96 / 72;
+                            default:
+                                return null;
+                        }
                     }
                 };
             </script>

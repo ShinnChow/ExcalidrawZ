@@ -49,8 +49,13 @@ extension AdjustElementsMiddleware {
                 item.y += dy
                 bump(&item.version, &item.versionNonce, &item.updated)
                 return .arrow(item)
+            case .image(var item):
+                item.x += dx
+                item.y += dy
+                bump(&item.version, &item.versionNonce, &item.updated)
+                return .image(item)
             default:
-                throw AdjustmentError(message: "Move only supports text, rectangle, ellipse, diamond, line, and arrow.")
+                throw AdjustmentError(message: "Move only supports text, rectangle, ellipse, diamond, line, arrow, and image elements.")
         }
     }
 

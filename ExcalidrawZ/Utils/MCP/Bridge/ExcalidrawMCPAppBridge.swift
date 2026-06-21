@@ -1072,7 +1072,7 @@ final class ExcalidrawMCPAppBridge {
     ) async throws -> FileState.ActiveFile {
         guard let activeFile = fileState.currentActiveFile else {
             throw BridgeError.unsupportedActiveFile(
-                "no file is open. Call list_files and open_file, or call create_file, before update_view."
+                "no file is open. Call list_files and open_file, or call create_file, before replace_view."
             )
         }
         try validateMCPWritableActiveFile(activeFile, fileState: fileState)
@@ -1511,7 +1511,7 @@ final class ExcalidrawMCPAppBridge {
                 "isOpen": .bool(false),
                 "canReadContent": .bool(false),
                 "canUpdateView": .bool(false),
-                "message": .string("No file is currently open. Call list_files/open_file, list_local_files/open_local_file, create_file, or create_local_file before update_view.")
+                "message": .string("No file is currently open. Call list_files/open_file, list_local_files/open_local_file, create_file, or create_local_file before replace_view.")
             ])
         }
 

@@ -57,6 +57,7 @@ struct InsertMathTool: Tool {
         let renderedSVG = try await render(payload)
         let insertResult = try await insert(
             renderedSVG,
+            position: payload.position ?? .auto,
             focus: payload.focus ?? true,
             canvasTarget: mathContext.canvasTarget
         )
@@ -105,6 +106,7 @@ struct InsertMathTool: Tool {
     @MainActor
     private func insert(
         _ renderedSVG: MathRenderedSVG,
+        position: ExcalidrawCore.MermaidPosition,
         focus: Bool,
         canvasTarget: ExcalidrawCoordinatorRegistry.CanvasTarget
     ) async throws -> ExcalidrawCore.MathImageResult {
@@ -117,7 +119,7 @@ struct InsertMathTool: Tool {
         return try await coordinator.insertMathImage(
             params: renderedSVG.mathImageParams,
             options: .init(
-                position: .auto,
+                position: position,
                 focus: focus ? .mode(.center) : .enabled(false),
                 captureUpdate: .immediately
             )
@@ -189,6 +191,7 @@ private struct InsertMathToolInput: Decodable {
     var showGrid: Bool?
     var backgroundColor: String?
     var focus: Bool?
+    var position: ExcalidrawCore.MermaidPosition?
 
     private enum CodingKeys: String, CodingKey {
         case mode
@@ -208,6 +211,7 @@ private struct InsertMathToolInput: Decodable {
         case showGrid = "show_grid"
         case backgroundColor = "background_color"
         case focus
+        case position
     }
 
     static func decodeLeniently(from input: String) throws -> Self {

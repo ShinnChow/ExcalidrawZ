@@ -8,7 +8,7 @@
 //  checkpoints were AI-generated vs user edits.
 //
 //  Scope: database `File` entities and URL-keyed `LocalFileCheckpoint`
-//  entities. MCP uses the same surface for both so update_view's checkpoint
+//  entities. MCP uses the same surface for both so replace_view's checkpoint
 //  status can be inspected consistently.
 //
 

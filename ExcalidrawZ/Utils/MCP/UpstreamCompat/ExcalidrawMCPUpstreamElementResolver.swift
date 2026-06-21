@@ -7,6 +7,14 @@
 
 import Foundation
 
+struct ExcalidrawMCPCheckpointNotFoundError: LocalizedError, Sendable {
+    let id: String
+
+    var errorDescription: String? {
+        "Checkpoint \"\(id)\" not found. Use a checkpointId returned by create_view or save_checkpoint, or recreate the diagram from scratch."
+    }
+}
+
 struct ExcalidrawMCPUpstreamViewportUpdate: Codable, Equatable, Sendable {
     let x: Double
     let y: Double
@@ -35,9 +43,7 @@ struct ExcalidrawMCPUpstreamElementResolver {
         let resolvedElements: [MCPJSONValue]
         if let restoreCheckpointID = extracted.restoreCheckpointID {
             guard let checkpointElements = await loadCheckpointElements(restoreCheckpointID) else {
-                throw MCPJSONRPCError.invalidParams(
-                    "Checkpoint \"\(restoreCheckpointID)\" not found. Recreate the diagram from scratch."
-                )
+                throw ExcalidrawMCPCheckpointNotFoundError(id: restoreCheckpointID)
             }
 
             let base = Self.extractViewportAndElements(checkpointElements).drawElements

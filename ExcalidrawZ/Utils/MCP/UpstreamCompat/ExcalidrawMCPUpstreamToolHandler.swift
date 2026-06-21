@@ -74,7 +74,16 @@ struct ExcalidrawMCPUpstreamToolHandler {
         let resolver = ExcalidrawMCPUpstreamElementResolver(
             loadCheckpointElements: readCheckpointElements
         )
-        let resolved = try await resolver.resolve(parsedElements)
+        let resolved: ExcalidrawMCPUpstreamElementResolver.Result
+        do {
+            resolved = try await resolver.resolve(parsedElements)
+        } catch let error as ExcalidrawMCPCheckpointNotFoundError {
+            return ExcalidrawMCPToolResult(
+                text: error.localizedDescription,
+                isError: true
+            )
+        }
+
         let convertedElements = try await convertRawElements(resolved.elements)
         let published = try await publishDiagram(
             convertedElements,
@@ -128,7 +137,10 @@ struct ExcalidrawMCPUpstreamToolHandler {
             throw MCPJSONRPCError.invalidParams("read_checkpoint requires arguments.id.")
         }
         guard let data = await readCheckpointData(id) else {
-            return ExcalidrawMCPToolResult(text: "")
+            return ExcalidrawMCPToolResult(
+                text: ExcalidrawMCPCheckpointNotFoundError(id: id).localizedDescription,
+                isError: true
+            )
         }
 
         let jsonData = try data.mcpJSONData()

@@ -12,9 +12,9 @@ enum ExcalidrawMCPOptimizedContract {
     static let instructions = """
     Use read_me first. It includes the full upstream excalidraw-mcp drawing guide
     plus ExcalidrawZ Optimized notes. Open or create a file first, then use
-    update_view with Excalidraw raw elements JSON. update_view only updates the
-    user's current ExcalidrawZ file.
-    After update_view changes visible content, call read_canvas_image once to
+    replace_view with Excalidraw raw elements JSON. replace_view replaces the
+    current file's complete raw elements array.
+    After replace_view changes visible content, call read_canvas_image once to
     inspect the rendered canvas before giving the user a final answer.
     Use get_app_context, get_current_file, file_access_status, list_groups,
     list_files, list_local_folders, list_local_files, create_file,
@@ -29,7 +29,7 @@ enum ExcalidrawMCPOptimizedContract {
     enum ToolName {
         static let readMe = ExcalidrawMCPUpstreamContract.ToolName.readMe
         static let readView = "read_view"
-        static let updateView = "update_view"
+        static let replaceView = "replace_view"
         static let getAppContext = "get_app_context"
         static let getCurrentFile = "get_current_file"
         static let listGroups = "list_groups"
@@ -62,16 +62,20 @@ enum ExcalidrawMCPOptimizedRecall {
        particular ExcalidrawZ group. Use list_local_folders / create_local_file
        / open_local_file when the target should be a user-authorized local
        folder file.
-    4. Call update_view, not create_view.
-    5. After update_view changes visible content, call read_canvas_image once
+    4. Call replace_view, not create_view.
+    5. After replace_view changes visible content, call read_canvas_image once
        before the final answer.
     6. Inspect the image for obvious layout, spacing, overlap, text, contrast,
-       and rendering issues. If something is wrong, usually fix it with
-       update_view; use adjust_elements only for small targeted patches.
+       and rendering issues. If you have only used raw elements so far, fix
+       broad layout issues with replace_view. After using native insertion tools
+       such as insert_math, prefer adjust_elements for targeted fixes, or call
+       read_view and include the complete current elements array in replace_view.
 
     ExcalidrawZ differences:
-    - update_view updates the user's current ExcalidrawZ file.
-    - update_view does not create or open files. If no file is open, call
+    - replace_view replaces the user's current ExcalidrawZ raw elements array.
+      Any existing element omitted from the submitted array is removed. This
+      includes image elements inserted by native tools such as insert_math.
+    - replace_view does not create or open files. If no file is open, call
       list_files and open_file, call create_file, or use the local-folder tools
       for local files. Pass create_file.group_id when the user wants the new
       library file in a specific ExcalidrawZ group. list_files omits locked or
@@ -81,13 +85,13 @@ enum ExcalidrawMCPOptimizedRecall {
       app-context source of truth for whether a file is open/readable/writable.
       canvas.loadedFileId is only populated when the WebView loaded file is
       aligned with currentFile.
-    - update_view records ExcalidrawZ File History checkpoints around the
+    - replace_view records ExcalidrawZ File History checkpoints around the
       mutation when the target supports history: mcp_pre before the update and
-      mcp_post after the update. update_view does not return checkpoint ids.
+      mcp_post after the update. replace_view does not return checkpoint ids.
       Call get_current_file_checkpoints when you need current-file App
       checkpoint ids for context or rollback, then use restore_file_history
       only when the user asks to roll back a saved library file state.
-    - Pass client_update_id to update_view when available. ExcalidrawZ stores it
+    - Pass client_update_id to replace_view when available. ExcalidrawZ stores it
       in File History checkpoint descriptions and treats repeated requests with
       the same current file + client_update_id as idempotent retries.
     - If the user asks to change canvas-level preferences such as theme,
@@ -100,7 +104,7 @@ enum ExcalidrawMCPOptimizedRecall {
 
     Optional app tools:
     - Use read_file for targeted structural reads of the current canvas.
-    - Use read_canvas_image as the normal visual self-check after update_view.
+    - Use read_canvas_image as the normal visual self-check after replace_view.
       Skip it only when the user explicitly asks for speed/no visual check, when
       no visible canvas content changed, or when the tool reports that the
       canvas cannot be captured.
@@ -115,11 +119,15 @@ enum ExcalidrawMCPOptimizedRecall {
       theme, viewBackgroundColor, gridModeEnabled, zenModeEnabled,
       viewModeEnabled, objectsSnapModeEnabled, isMidpointSnappingEnabled,
       bindingPreference, preferredSelectionTool, boxSelectionMode, and stats.
-    - update_view is the primary drawing mutation tool. Use it for new drawings,
-      whole-scene replacement, or any edit where you can provide the complete
-      revised raw elements array.
+    - replace_view is the primary raw-element replacement tool. Use it for new
+      drawings, full-scene replacement, or any edit where you can provide the
+      complete revised raw elements array. It replaces the complete raw scene;
+      missing elements are deleted.
     - Use insert_math for LaTeX formulas and function plots. It renders the
       math as a canvas image and inserts it into the currently open file.
+      After insert_math returns elementId, move/resize/refine that math image
+      with adjust_elements, or include the returned image element when you later
+      call replace_view.
     - Use adjust_elements only for small targeted patches to the currently open
       file, such as adding a few elements, editing known element ids, deleting a
       small set, or inserting Mermaid content. Do not use adjust_elements for
@@ -137,7 +145,7 @@ enum ExcalidrawMCPOptimizedRecall {
     Important:
     - Do not replace the upstream layout/camera guidance with these notes.
       These notes only tell you which ExcalidrawZ tool to use.
-    - The raw element examples below should be sent through update_view in this
+    - The raw element examples below should be sent through replace_view in this
       Optimized mode.
 
     \(upstreamGuideForOptimizedMode)
@@ -149,19 +157,19 @@ enum ExcalidrawMCPOptimizedRecall {
         var guide = ExcalidrawMCPUpstreamRecall.cheatSheet
         guide = guide.replacingOccurrences(
             of: "Now use create_view to draw.",
-            with: "Now use update_view to draw."
+            with: "Now use replace_view to draw."
         )
         .replacingOccurrences(
             of: "using create_view for the first time.",
-            with: "using update_view for the first time."
+            with: "using replace_view for the first time."
         )
         .replacingOccurrences(
             of: "Every create_view call returns a `checkpointId` in its response. To continue from a previous diagram state, start your elements array with a restoreCheckpoint element:",
-            with: "Optimized update_view records ExcalidrawZ File History checkpoints instead of returning a restoreCheckpoint id. To inspect current-file history, call get_current_file_checkpoints. To roll back a library file, use restore_file_history with an App checkpoint id. For ordinary revisions, inspect the current result with read_view or read_canvas_image, then send the complete revised elements array to update_view."
+            with: "Optimized replace_view records ExcalidrawZ File History checkpoints instead of returning a restoreCheckpoint id. To inspect current-file history, call get_current_file_checkpoints. To roll back a library file, use restore_file_history with an App checkpoint id. For ordinary revisions, inspect the current result with read_view or read_canvas_image, then send the complete revised elements array to replace_view."
         )
         .replacingOccurrences(
             of: "`[{\"type\":\"restoreCheckpoint\",\"id\":\"<checkpointId>\"}, ...additional new elements...]`",
-            with: "Do not rely on update_view to return a `checkpointId` in Optimized mode."
+            with: "Do not rely on replace_view to return a `checkpointId` in Optimized mode."
         )
         .replacingOccurrences(
             of: "The saved state (including any user edits made in fullscreen) is loaded from the client, and your new elements are appended on top. This saves tokens — you don't need to re-send the entire diagram.",
@@ -173,7 +181,7 @@ enum ExcalidrawMCPOptimizedRecall {
         )
         .replacingOccurrences(
             of: "If the user asks to revise, call create_view again",
-            with: "If the user asks to revise, call update_view again"
+            with: "If the user asks to revise, call replace_view again"
         )
         return replacingDarkModeWorkaround(in: guide)
     }
@@ -233,7 +241,7 @@ extension ExcalidrawMCPToolSchemas {
         "additionalProperties": .bool(false)
     ])
 
-    static let optimizedUpdateView: MCPJSONValue = .object([
+    static let optimizedReplaceView: MCPJSONValue = .object([
         "type": .string("object"),
         "properties": .object([
             "elements": .object([
@@ -462,7 +470,7 @@ extension ExcalidrawMCPToolSchemas {
 
 enum ExcalidrawMCPOptimizedToolCatalog {
     static var tools: [ExcalidrawMCPTool] {
-        baseTools + appToolAdapters.map(\.mcpTool) + [updateViewTool]
+        baseTools + appToolAdapters.map(\.mcpTool) + [replaceViewTool]
     }
 
     static let appToolAdapters: [ExcalidrawMCPLLMCoreToolAdapter] = [
@@ -487,7 +495,7 @@ enum ExcalidrawMCPOptimizedToolCatalog {
         ExcalidrawMCPLLMCoreToolAdapter(
             tool: ReadCanvasImageTool(),
             title: "Read Canvas Image",
-            description: "Exports the active ExcalidrawZ canvas as a PNG image. After update_view changes visible content, call this once before the final answer to inspect layout, colors, spacing, text, and rendering quality.",
+            description: "Exports the active ExcalidrawZ canvas as a PNG image. After replace_view changes visible content, call this once before the final answer to inspect layout, colors, spacing, text, and rendering quality.",
             annotations: ["readOnlyHint": .bool(true)],
             contextProvider: {
                 try await ExcalidrawMCPAppBridge.shared.optimizedChatToolContext(
@@ -520,7 +528,7 @@ enum ExcalidrawMCPOptimizedToolCatalog {
         ExcalidrawMCPLLMCoreToolAdapter(
             tool: InsertMathTool(),
             title: "Math",
-            description: "Insert math content into the active ExcalidrawZ file. Use mode=formula for LaTeX equations and mode=function for plotted function graphs. Prefer this over adjust_elements for formula or graph insertion.",
+            description: "Insert math content into the active ExcalidrawZ file. Use mode=formula for LaTeX equations and mode=function for plotted function graphs. After insertion, use adjust_elements with the returned elementId for targeted move/resize/refinement.",
             contextProvider: {
                 try await ExcalidrawMCPAppBridge.shared.optimizedChatToolContext(
                     requiresMutation: true,
@@ -532,7 +540,7 @@ enum ExcalidrawMCPOptimizedToolCatalog {
         ExcalidrawMCPLLMCoreToolAdapter(
             tool: AdjustElementsTool(),
             title: "Adjust Elements",
-            description: "Targeted patch tool for the currently open ExcalidrawZ file. Use update_view for new drawings, whole-scene replacement, or complete raw-elements updates. Use adjust_elements only for small incremental add/update/delete/Mermaid edits when preserving the rest of the canvas is important.",
+            description: "Targeted patch tool for the currently open ExcalidrawZ file. Use replace_view for new drawings, full-scene replacement, or complete raw-elements replacement. Use adjust_elements for small incremental add/update/delete/Mermaid edits, especially after insert_math or other native insertion tools.",
             contextProvider: {
                 try await ExcalidrawMCPAppBridge.shared.optimizedChatToolContext(
                     requiresMutation: true,
@@ -617,7 +625,7 @@ enum ExcalidrawMCPOptimizedToolCatalog {
         ExcalidrawMCPTool(
             name: ExcalidrawMCPOptimizedContract.ToolName.readMe,
             title: "Read ExcalidrawZ Optimized MCP Guide",
-            description: "Returns the full upstream excalidraw-mcp drawing guide plus ExcalidrawZ Optimized update workflow notes. Call this first when using Optimized MCP.",
+            description: "Returns the full upstream excalidraw-mcp drawing guide plus ExcalidrawZ Optimized replacement workflow notes. Call this first when using Optimized MCP.",
             inputSchema: ExcalidrawMCPToolSchemas.emptyObject,
             annotations: ["readOnlyHint": .bool(true)]
         ),
@@ -695,11 +703,11 @@ enum ExcalidrawMCPOptimizedToolCatalog {
         )
     ]
 
-    private static let updateViewTool = ExcalidrawMCPTool(
-        name: ExcalidrawMCPOptimizedContract.ToolName.updateView,
-        title: "Update View",
-        description: "Updates the currently open ExcalidrawZ file with raw Excalidraw elements. Call list_files/open_file, list_local_files/open_local_file, create_file, or create_local_file first when no file is open.",
-        inputSchema: ExcalidrawMCPToolSchemas.optimizedUpdateView
+    private static let replaceViewTool = ExcalidrawMCPTool(
+        name: ExcalidrawMCPOptimizedContract.ToolName.replaceView,
+        title: "Replace View",
+        description: "Replaces the currently open ExcalidrawZ file's complete raw elements array. This is full-scene replacement: any existing element omitted from elements is removed. Call list_files/open_file, list_local_files/open_local_file, create_file, or create_local_file first when no file is open.",
+        inputSchema: ExcalidrawMCPToolSchemas.optimizedReplaceView
     )
 }
 
@@ -807,8 +815,8 @@ struct ExcalidrawMCPOptimizedToolHandler {
             case ExcalidrawMCPOptimizedContract.ToolName.setCanvasPreferences:
                 return try await setCanvasPreferencesTool(arguments: arguments)
 
-            case ExcalidrawMCPOptimizedContract.ToolName.updateView:
-                return try await updateView(arguments: arguments)
+            case ExcalidrawMCPOptimizedContract.ToolName.replaceView:
+                return try await replaceView(arguments: arguments)
 
             default:
                 if let adapter = appToolAdapters[name] {
@@ -886,7 +894,7 @@ struct ExcalidrawMCPOptimizedToolHandler {
         return try jsonToolResult(
             value: .object([
                 "file": file,
-                "message": .string("Created and opened a new ExcalidrawZ file. You can now call update_view.")
+                "message": .string("Created and opened a new ExcalidrawZ file. You can now call replace_view.")
             ]),
             fallbackText: "Created and opened a new ExcalidrawZ file."
         )
@@ -901,7 +909,7 @@ struct ExcalidrawMCPOptimizedToolHandler {
         return try jsonToolResult(
             value: .object([
                 "file": file,
-                "message": .string("Created and opened a new local Excalidraw file. You can now call update_view.")
+                "message": .string("Created and opened a new local Excalidraw file. You can now call replace_view.")
             ]),
             fallbackText: "Created and opened a new local Excalidraw file."
         )
@@ -916,7 +924,7 @@ struct ExcalidrawMCPOptimizedToolHandler {
         return try jsonToolResult(
             value: .object([
                 "file": file,
-                "message": .string("Opened the ExcalidrawZ file. You can now call update_view.")
+                "message": .string("Opened the ExcalidrawZ file. You can now call replace_view.")
             ]),
             fallbackText: "Opened the ExcalidrawZ file."
         )
@@ -931,7 +939,7 @@ struct ExcalidrawMCPOptimizedToolHandler {
         return try jsonToolResult(
             value: .object([
                 "file": file,
-                "message": .string("Opened the local Excalidraw file. You can now call update_view.")
+                "message": .string("Opened the local Excalidraw file. You can now call replace_view.")
             ]),
             fallbackText: "Opened the local Excalidraw file."
         )
@@ -946,9 +954,9 @@ struct ExcalidrawMCPOptimizedToolHandler {
         )
     }
 
-    private func updateView(arguments: [String: MCPJSONValue]) async throws -> ExcalidrawMCPToolResult {
+    private func replaceView(arguments: [String: MCPJSONValue]) async throws -> ExcalidrawMCPToolResult {
         guard let elementsString = arguments["elements"]?.stringValue else {
-            throw MCPJSONRPCError.invalidParams("update_view requires arguments.elements.")
+            throw MCPJSONRPCError.invalidParams("replace_view requires arguments.elements.")
         }
         let clientUpdateID = arguments["client_update_id"]?.stringValue
 
@@ -973,7 +981,16 @@ struct ExcalidrawMCPOptimizedToolHandler {
         let resolver = ExcalidrawMCPUpstreamElementResolver(
             loadCheckpointElements: readCheckpointElements
         )
-        let resolved = try await resolver.resolve(parsedElements)
+        let resolved: ExcalidrawMCPUpstreamElementResolver.Result
+        do {
+            resolved = try await resolver.resolve(parsedElements)
+        } catch let error as ExcalidrawMCPCheckpointNotFoundError {
+            return ExcalidrawMCPToolResult(
+                text: error.localizedDescription,
+                isError: true
+            )
+        }
+
         let convertedElements = try await convertRawElements(resolved.elements)
         let published = try await publishDiagram(
             convertedElements,
@@ -985,12 +1002,12 @@ struct ExcalidrawMCPOptimizedToolHandler {
 
         return ExcalidrawMCPToolResult(
             text: """
-            View updated in ExcalidrawZ.
+            View replaced in ExcalidrawZ.
             \(appCheckpointText)
             Next, call read_canvas_image once to inspect the rendered canvas before your final answer.
             If you need App checkpoint ids for current-file history or rollback, call get_current_file_checkpoints.
             """,
-            structuredContent: structuredUpdateViewContent(
+            structuredContent: structuredReplaceViewContent(
                 published: published,
                 clientUpdateID: clientUpdateID
             )
@@ -1096,7 +1113,7 @@ struct ExcalidrawMCPOptimizedToolHandler {
         return "App file-history checkpoints recorded. Call get_current_file_checkpoints to retrieve their ids."
     }
 
-    private func structuredUpdateViewContent(
+    private func structuredReplaceViewContent(
         published: PublishedDiagram,
         clientUpdateID: String?
     ) -> MCPJSONValue {
