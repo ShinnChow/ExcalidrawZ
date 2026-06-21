@@ -60,14 +60,15 @@ actor ExcalidrawMCPToolRouter {
     private func result(for request: MCPJSONRPCRequest) async throws -> MCPJSONValue {
         switch request.method {
             case "initialize":
-                return initializeResult()
+                return await initializeResult()
             case "notifications/initialized":
                 return .object([:])
             case "ping":
                 return .object([:])
             case "tools/list":
+                let tools = await toolsForCurrentMode()
                 return .object([
-                    "tools": .array(toolsForCurrentMode.map(\.jsonValue))
+                    "tools": .array(tools.map(\.jsonValue))
                 ])
             case "tools/call":
                 return try await callTool(params: request.params)
@@ -76,8 +77,10 @@ actor ExcalidrawMCPToolRouter {
         }
     }
 
-    private func initializeResult() -> MCPJSONValue {
-        .object([
+    private func initializeResult() async -> MCPJSONValue {
+        let instructions = await instructionsForCurrentMode()
+
+        return .object([
             "protocolVersion": .string(ExcalidrawMCPUpstreamContract.protocolVersion),
             "capabilities": .object([
                 "tools": .object([:])
@@ -88,9 +91,7 @@ actor ExcalidrawMCPToolRouter {
                     forInfoDictionaryKey: "CFBundleShortVersionString"
                 ) as? String ?? "0")
             ]),
-            "instructions": .string(
-                instructionsForCurrentMode
-            )
+            "instructions": .string(instructions)
         ])
     }
 
@@ -103,7 +104,7 @@ actor ExcalidrawMCPToolRouter {
 
         let arguments = object["arguments"]?.objectValue ?? [:]
         let result: ExcalidrawMCPToolResult
-        switch serviceMode {
+        switch await effectiveServiceMode() {
             case .basic:
                 result = try await makeUpstreamToolHandler().callTool(
                     name: name,
@@ -118,8 +119,8 @@ actor ExcalidrawMCPToolRouter {
         return result.jsonValue
     }
 
-    private var toolsForCurrentMode: [ExcalidrawMCPTool] {
-        switch serviceMode {
+    private func toolsForCurrentMode() async -> [ExcalidrawMCPTool] {
+        switch await effectiveServiceMode() {
             case .basic:
                 return ExcalidrawMCPUpstreamToolCatalog.tools
             case .optimized:
@@ -127,13 +128,25 @@ actor ExcalidrawMCPToolRouter {
         }
     }
 
-    private var instructionsForCurrentMode: String {
-        switch serviceMode {
+    private func instructionsForCurrentMode() async -> String {
+        switch await effectiveServiceMode() {
             case .basic:
                 return "Use read_me first, then create_view with Excalidraw elements JSON."
             case .optimized:
                 return ExcalidrawMCPOptimizedContract.instructions
         }
+    }
+
+    private func effectiveServiceMode() async -> ExcalidrawMCPServiceMode {
+        guard serviceMode == .optimized else {
+            return serviceMode
+        }
+
+        let canUseOptimizedMCPServices = await MainActor.run {
+            Store.shared.canUseOptimizedMCPServices
+        }
+
+        return canUseOptimizedMCPServices ? .optimized : .basic
     }
 
     private func makeUpstreamToolHandler() -> ExcalidrawMCPUpstreamToolHandler {

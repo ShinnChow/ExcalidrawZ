@@ -43,7 +43,13 @@ final class ExcalidrawZMCPServerController: ObservableObject {
     private init(port: UInt16 = ExcalidrawZMCPServer.defaultPort) {
         self.port = port
         self.isEnabled = UserDefaults.standard.bool(forKey: Self.isEnabledDefaultsKey)
-        self.serviceMode = Self.loadServiceMode()
+        let loadedServiceMode = Self.loadServiceMode()
+        let authorizedServiceMode = Self.authorizedServiceMode(loadedServiceMode)
+        self.serviceMode = authorizedServiceMode
+
+        if authorizedServiceMode != loadedServiceMode {
+            Self.saveServiceMode(authorizedServiceMode)
+        }
 
         if isEnabled {
             startServerIfNeeded()
@@ -63,13 +69,20 @@ final class ExcalidrawZMCPServerController: ObservableObject {
     }
 
     func setServiceMode(_ mode: ExcalidrawMCPServiceMode) {
-        guard serviceMode != mode else { return }
-        serviceMode = mode
-        UserDefaults.standard.set(mode.rawValue, forKey: Self.serviceModeDefaultsKey)
+        let authorizedMode = Self.authorizedServiceMode(mode)
+        guard serviceMode != authorizedMode else {
+            if authorizedMode != mode {
+                Self.saveServiceMode(authorizedMode)
+            }
+            return
+        }
+
+        serviceMode = authorizedMode
+        Self.saveServiceMode(authorizedMode)
 
         let router = router
         Task {
-            await router?.setServiceMode(mode)
+            await router?.setServiceMode(authorizedMode)
         }
     }
 
@@ -157,5 +170,17 @@ final class ExcalidrawZMCPServerController: ObservableObject {
             return .basic
         }
         return mode
+    }
+
+    private static func saveServiceMode(_ mode: ExcalidrawMCPServiceMode) {
+        UserDefaults.standard.set(mode.rawValue, forKey: serviceModeDefaultsKey)
+    }
+
+    private static func authorizedServiceMode(_ mode: ExcalidrawMCPServiceMode) -> ExcalidrawMCPServiceMode {
+        guard mode == .optimized,
+              !Store.shared.canUseOptimizedMCPServices else {
+            return mode
+        }
+        return .basic
     }
 }
