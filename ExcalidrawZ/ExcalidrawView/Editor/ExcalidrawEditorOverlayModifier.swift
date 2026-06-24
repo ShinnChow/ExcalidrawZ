@@ -27,6 +27,7 @@ struct ExcalidrawEditorOverlayModifier: ViewModifier {
     @State private var isSelectFilePlaceholderPresented = false
     @State private var progressPresentationTask: Task<Void, Never>?
     @State private var loadingOverlayDismissTask: Task<Void, Never>?
+    @State private var loadingOverlayCoverImage: PlatformImage?
 
     func body(content: Content) -> some View {
         ZStack(alignment: .center) {
@@ -57,7 +58,6 @@ struct ExcalidrawEditorOverlayModifier: ViewModifier {
         }
         .ignoresSafeArea(.container, edges: .bottom)
         .transition(.opacity)
-        .animation(.default, value: isProgressViewPresented)
         .onDisappear {
             progressPresentationTask?.cancel()
             progressPresentationTask = nil
@@ -90,7 +90,7 @@ struct ExcalidrawEditorOverlayModifier: ViewModifier {
 
     @ViewBuilder
     private var loadingOverlayBackground: some View {
-        if let image = loadingCoverImage {
+        if let image = loadingOverlayCoverImage {
             Image(platformImage: image)
                 .resizable()
                 .scaledToFill()
@@ -136,14 +136,19 @@ struct ExcalidrawEditorOverlayModifier: ViewModifier {
                     guard !Task.isCancelled else { return }
                     isProgressViewPresented = false
                     isLoadingOverlayPresented = false
+                    loadingOverlayCoverImage = nil
                     loadingOverlayDismissTask = nil
                 }
             } else {
                 isLoadingOverlayPresented = false
+                loadingOverlayCoverImage = nil
             }
             return
         }
 
+        if !isLoadingOverlayPresented {
+            loadingOverlayCoverImage = loadingCoverImage
+        }
         isLoadingOverlayPresented = true
         progressPresentationTask = Task { @MainActor in
             try? await Task.sleep(nanoseconds: 150_000_000)
