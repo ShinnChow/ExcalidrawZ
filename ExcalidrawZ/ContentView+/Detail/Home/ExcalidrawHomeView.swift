@@ -53,16 +53,43 @@ struct ExcalidrawHomeView: View {
     private let folderNavigationCleanupDelay: TimeInterval = 0.5
     
     var body: some View {
+        homeLayer
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background {
+                editorLayer
+            }
+            .overlay(alignment: .bottomTrailing) {
+                if fileHomeItemTransitionState.canShowItemContainerView {
+                    SyncStatusPopover()
+                }
+            }
+            .watch(value: fileState.currentActiveFile) { newValue in
+                if newValue == nil {
+                    initCurrentGroups()
+
+                    updateLastHomeType()
+                }
+            }
+            .watch(value: fileState.currentActiveGroup, initial: true) { _, newValue in
+                handleActiveGroupChanged(newValue)
+            }
+    }
+
+    private var editorLayer: some View {
+        ExcalidrawEditor(
+            activeFile: fileState.activeFileBinding,
+            interactionEnabled: !disableInteration
+        )
+        .opacity(disableInteration || !fileHomeItemTransitionState.canShowExcalidrawCanvas ? 0 : 1)
+    }
+
+    private var homeLayer: some View {
         ZStack {
 //            background
 //                .ignoresSafeArea()
 //                .opacity(disableInteration || !fileHomeItemTransitionState.canShowExcalidrawCanvas ? 0 : 1)
 
-            ExcalidrawEditor(
-                activeFile: fileState.activeFileBinding,
-                interactionEnabled: !disableInteration
-            )
-            .opacity(disableInteration || !fileHomeItemTransitionState.canShowExcalidrawCanvas ? 0 : 1)
+            Color.clear
             
             if fileHomeItemTransitionState.canShowItemContainerView {
                 switch lastHomeType {
@@ -188,21 +215,6 @@ struct ExcalidrawHomeView: View {
                 }
             }
         }
-        .overlay(alignment: .bottomTrailing) {
-            if fileHomeItemTransitionState.canShowItemContainerView {
-                SyncStatusPopover()
-            }
-        }
-        .watch(value: fileState.currentActiveFile) { newValue in
-            if newValue == nil {
-                initCurrentGroups()
-                
-                updateLastHomeType()
-            }
-        }
-        .watch(value: fileState.currentActiveGroup, initial: true) { _, newValue in
-            handleActiveGroupChanged(newValue)
-        }
     }
 
     private func handleActiveGroupChanged(_ newValue: FileState.ActiveGroup?) {
@@ -297,19 +309,21 @@ struct ExcalidrawHomeView: View {
                 }
 
             default:
-                if lastHomeType == .fileHome, !renderedGroups.isEmpty {
+                if lastHomeType == .fileHome,
+                   !renderedGroups.isEmpty {
                     startFolderTransition()
                     currentGroups.removeAll()
                     withAnimation(.smooth(duration: folderNavigationTransitionDuration)) {
-                        lastHomeType = .home
+                        updateLastHomeType()
                     }
                     resetHomeTransitionStateForGroups()
                     return
-                } else if lastHomeType == .localFileHome, !renderedFolders.isEmpty {
+                } else if lastHomeType == .localFileHome,
+                          !renderedFolders.isEmpty {
                     startFolderTransition()
                     currentFolders.removeAll()
                     withAnimation(.smooth(duration: folderNavigationTransitionDuration)) {
-                        lastHomeType = .home
+                        updateLastHomeType()
                     }
                     resetHomeTransitionStateForFolders()
                     return

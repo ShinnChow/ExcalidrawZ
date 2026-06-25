@@ -414,19 +414,37 @@ final class ToolState: ObservableObject {
     
     func toggleTool(_ tool: ExcalidrawTool) async throws {
         logger.debug("Toggle tool: \(String(describing: tool))")
-        switch tool {
-            case .webEmbed:
-                try await self.excalidrawWebCoordinator?.toggleToolbarAction(tool: .webEmbed)
-            case .magicFrame:
-                try await self.excalidrawWebCoordinator?.toggleToolbarAction(tool: .magicFrame)
-            case .lasso:
-                try await self.excalidrawWebCoordinator?.toggleToolbarAction(tool: .lasso)
-            default:
-                if let key = tool.keyEquivalent {
-                    try await self.excalidrawWebCoordinator?.toggleToolbarAction(key: key)
-                } else {
-                    try await self.excalidrawWebCoordinator?.toggleToolbarAction(key: tool.rawValue)
-                }
+
+        let coordinator = excalidrawWebCoordinator
+        let previousTool = await MainActor.run { activatedTool }
+        let previousLastTool = coordinator?.lastTool
+
+        await MainActor.run {
+            coordinator?.lastTool = tool
+            setActivedTool(tool)
+        }
+
+        do {
+            switch tool {
+                case .webEmbed:
+                    try await coordinator?.toggleToolbarAction(tool: .webEmbed)
+                case .magicFrame:
+                    try await coordinator?.toggleToolbarAction(tool: .magicFrame)
+                case .lasso:
+                    try await coordinator?.toggleToolbarAction(tool: .lasso)
+                default:
+                    if let key = tool.keyEquivalent {
+                        try await coordinator?.toggleToolbarAction(key: key)
+                    } else {
+                        try await coordinator?.toggleToolbarAction(key: tool.rawValue)
+                    }
+            }
+        } catch {
+            await MainActor.run {
+                coordinator?.lastTool = previousLastTool
+                setActivedTool(previousTool)
+            }
+            throw error
         }
     }
     
