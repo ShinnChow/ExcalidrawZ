@@ -163,6 +163,7 @@ struct HomeView: View {
 
 struct RecentlyFilesProvider: View {
     @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.colorScheme) private var colorScheme
 
     var content: ([FileState.ActiveFile]) -> AnyView
     
@@ -201,6 +202,8 @@ struct RecentlyFilesProvider: View {
     
     
     @State private var recentlyFiles: [FileState.ActiveFile] = []
+    @State private var lastRecentlyFileIDs: [String] = []
+    @State private var lastCoverPriorityKey: CoverPriorityKey?
 
     private struct FileRefreshKey: Equatable {
         let id: String
@@ -218,6 +221,11 @@ struct RecentlyFilesProvider: View {
                 createdAt: $0.createdAt
             )
         }
+    }
+
+    private struct CoverPriorityKey: Equatable {
+        let colorScheme: ColorScheme
+        let fileIDs: [String]
     }
 
     private var collaborationFilesRefreshKey: [FileRefreshKey] {
@@ -242,8 +250,13 @@ struct RecentlyFilesProvider: View {
             .watch(value: collaborationFilesRefreshKey) { _ in
                 getRecentlyFiles()
             }
-            .watch(value: scenePhase) { _ in
+            .watch(value: colorScheme) { _ in
                 getRecentlyFiles()
+            }
+            .watch(value: scenePhase) { newValue in
+                if newValue == .active {
+                    getRecentlyFiles()
+                }
             }
             .onAppear {
                 getRecentlyFiles()
@@ -292,7 +305,24 @@ struct RecentlyFilesProvider: View {
             $0.value > $1.value
         }).map {$0.key}
         
-        self.recentlyFiles = Array(sortedAllFiles.prefix(20))
+        let recentlyFiles = Array(sortedAllFiles.prefix(20))
+        let recentlyFileIDs = recentlyFiles.map(\.id)
+        if recentlyFileIDs != lastRecentlyFileIDs {
+            lastRecentlyFileIDs = recentlyFileIDs
+            self.recentlyFiles = recentlyFiles
+        }
+
+        let coverPriorityKey = CoverPriorityKey(
+            colorScheme: colorScheme,
+            fileIDs: recentlyFileIDs
+        )
+        if coverPriorityKey != lastCoverPriorityKey {
+            lastCoverPriorityKey = coverPriorityKey
+            FileCoverCacheCoordinator.shared.prioritizeRecentlyVisibleFiles(
+                recentlyFiles,
+                colorScheme: colorScheme
+            )
+        }
     }
 }
 
@@ -405,4 +435,3 @@ private struct APreviewView: View {
         .environment(\.managedObjectContext, PersistenceController.preview.container.viewContext)
 }
 #endif // DEBUG
-

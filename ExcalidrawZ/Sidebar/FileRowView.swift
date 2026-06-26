@@ -15,120 +15,130 @@ struct FileRowView: View {
     @Environment(\.managedObjectContext) private var viewContext
     @Environment(\.containerHorizontalSizeClass) private var containerHorizontalSizeClass
     @Environment(\.alertToast) private var alertToast
-    @EnvironmentObject var fileState: FileState
     @EnvironmentObject private var lockedContentState: LockedContentStateStore
     
     var file: File
     var files: FetchedResults<File>
+    var fileState: FileState
     
-    init(file: File, sameGroupFiles files: FetchedResults<File>) {
+    init(file: File, sameGroupFiles files: FetchedResults<File>, fileState: FileState) {
         self.file = file
         self.files = files
+        self.fileState = fileState
     }
-    
-    @FetchRequest(
-        sortDescriptors: [SortDescriptor(\.createdAt, order: .forward)],
-        predicate: NSPredicate(format: "parent = nil"),
-        animation: .default
-    )
-    var topLevelGroups: FetchedResults<Group>
     
     init(
         file: File,
         files: FetchedResults<File>,
+        fileState: FileState
     ) {
         self.file = file
         self.files = files
+        self.fileState = fileState
     }
     
     @State private var showPermanentlyDeleteAlert: Bool = false
     @State private var fileStatus: FileStatus?
+    @StateObject private var selectionState = SidebarFileRowSelectionState()
     @FocusState private var isFocused: Bool
-    
-    var isSelected: Bool {
-        fileState.currentActiveFile == .file(file)
+
+    private var currentFileStatus: FileStatus {
+        fileStatus ?? FileStatusService.shared.statusBox(for: .file(file)).status
     }
     
     var body: some View {
-        if fileStatus?.contentAvailability == .missing {
-            content()
-                .modifier(MissingFileContextMenuModifier(file: .file(file)))
+        if currentFileStatus.contentAvailability == .missing {
+            MissingFileMenuProvider(file: .file(file)) { triggers in
+                content(onToggleTryToRecover: triggers.onToggleTryToRecover)
+                    .contextMenu {
+                        MissingFileMenuItems(
+                            file: .file(file)
+                        ) {
+                            triggers.onToggleTryToRecover()
+                        } onToggleDelete: {
+                            triggers.onToggleDelete()
+                        }
+                        .labelStyle(.titleAndIcon)
+                    }
+            }
         } else {
             content()
-                .modifier(FileContextMenuModifier(file: file))
+                .modifier(FileContextMenuWithFileStateModifier(file: file, fileState: fileState))
         }
     }
     
     @ViewBuilder
-    private func content() -> some View {
-        MissingFileMenuProvider(file: .file(file)) { triggers in
-            FileRowButton(
-                isSelected: isSelected,
-                isMultiSelected: fileState.selectedFiles.contains(file)
-            ) {
+    private func content(onToggleTryToRecover: (() -> Void)? = nil) -> some View {
+        FileRowButton(
+            isSelected: selectionState.isSelected,
+            isMultiSelected: selectionState.isMultiSelected
+        ) {
 #if os(macOS)
-                if NSEvent.modifierFlags.contains(.shift) {
-                    // 1. If this is the first shift-click, remember it and select that file.
-                    // Shift don't change the start file.
-                    if fileState.selectedFiles.isEmpty {
-                        fileState.selectedFiles.insert(file)
-                        fileState.selectedStartFile = file
-                    } else {
-                        guard let startFile = fileState.selectedStartFile,
-                              let startIdx = files.firstIndex(of: startFile),
-                              let endIdx = files.firstIndex(of: file) else {
-                            return
-                        }
-                        let range = startIdx <= endIdx
-                        ? startIdx...endIdx
-                        : endIdx...startIdx
-                        let sliceItems = files[range]
-                        let sliceSet = Set(sliceItems)
-                        fileState.selectedFiles = sliceSet
-                    }
-                } else if NSEvent.modifierFlags.contains(.command) {
-                    fileState.selectedFiles.insertOrRemove(file)
+            if NSEvent.modifierFlags.contains(.shift) {
+                // 1. If this is the first shift-click, remember it and select that file.
+                // Shift don't change the start file.
+                if fileState.selectedFiles.isEmpty {
+                    fileState.selectedFiles.insert(file)
                     fileState.selectedStartFile = file
                 } else {
-                    guard FileStatusService.shared.statusBox(for: .file(file)).status.contentAvailability != .missing else {
-                        triggers.onToggleTryToRecover()
+                    guard let startFile = fileState.selectedStartFile,
+                          let startIdx = files.firstIndex(of: startFile),
+                          let endIdx = files.firstIndex(of: file) else {
                         return
                     }
-                    activeFile(file)
-                    fileState.selectedStartFile = file
+                    let range = startIdx <= endIdx
+                    ? startIdx...endIdx
+                    : endIdx...startIdx
+                    let sliceItems = files[range]
+                    let sliceSet = Set(sliceItems)
+                    fileState.selectedFiles = sliceSet
                 }
-#else
+            } else if NSEvent.modifierFlags.contains(.command) {
+                fileState.selectedFiles.insertOrRemove(file)
+                fileState.selectedStartFile = file
+            } else {
                 guard FileStatusService.shared.statusBox(for: .file(file)).status.contentAvailability != .missing else {
-                    triggers.onToggleTryToRecover()
+                    onToggleTryToRecover?()
                     return
                 }
                 activeFile(file)
                 fileState.selectedStartFile = file
+            }
+#else
+            guard FileStatusService.shared.statusBox(for: .file(file)).status.contentAvailability != .missing else {
+                onToggleTryToRecover?()
+                return
+            }
+            activeFile(file)
+            fileState.selectedStartFile = file
 #endif
-            } label: {
-                FileRowLabel(
-                    updatedAt: file.updatedAt ?? .distantPast,
-                    isInTrash: file.inTrash == true,
-                    lockState: lockedContentState.lockState(for: .file(file))
-                ) {
-                  Text(file.name ?? ""/* + " - \(file.rank)"*/)
+        } label: {
+            FileRowLabel(
+                updatedAt: file.updatedAt ?? .distantPast,
+                isInTrash: file.inTrash == true,
+                lockState: lockedContentState.previewLockState(for: .file(file)) ?? .plaintext
+            ) {
+                Text(file.name ?? ""/* + " - \(file.rank)"*/)
                     .foregroundStyle(
-                        fileStatus?.contentAvailability == .missing
+                        currentFileStatus.contentAvailability == .missing
                         ? AnyShapeStyle(Color.red)
                         : AnyShapeStyle(HierarchicalShapeStyle.primary)
                     )
-                } nameTrailingView: {
-                    if fileStatus?.contentAvailability == .missing {
-                        Image(systemSymbol: .exclamationmarkTriangle)
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
-                    }
+            } nameTrailingView: {
+                if currentFileStatus.contentAvailability == .missing {
+                    Image(systemSymbol: .exclamationmarkTriangle)
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
                 }
             }
         }
         .modifier(FileRowDragDropModifier(file: file, sameGroupFiles: files))
         .bindFileStatus(for: .file(file), status: $fileStatus)
+        .onAppear {
+            selectionState.bind(file: file, fileState: fileState)
+        }
         .task(id: file.objectID.uriRepresentation()) {
+            guard lockedContentState.previewLockState(for: .file(file)) == nil else { return }
             await lockedContentState.refresh(file: .file(file))
         }
     }
@@ -143,10 +153,10 @@ struct FileRowView: View {
                     fetchRequest.predicate = NSPredicate(format: "type == 'trash'")
                     return (try? viewContext.fetch(fetchRequest))?.first
                 }() {
-                    fileState.currentActiveGroup = .group(trashGroup)
+                    fileState.setActiveGroupIfNeeded(.group(trashGroup))
                 }
             } else if let group = file.group {
-                fileState.currentActiveGroup = .group(group)
+                fileState.setActiveGroupIfNeeded(.group(group))
             }
         }
     }

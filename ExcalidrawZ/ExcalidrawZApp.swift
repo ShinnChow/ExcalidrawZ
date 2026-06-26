@@ -103,12 +103,20 @@ struct ExcalidrawZApp: App {
             UserDefaults.standard.set(1, forKey: "FolderStructureStyle")
         }
         
-        // refresh spotlight index if expiration
+        // refresh spotlight index if expired, or after changing the indexer implementation
         var shouldRefreshSpotlightIndex = false
-        let dateString = UserDefaults.standard.string(forKey: "LastSpotlightIndexRefreshTime")
+        let storedSpotlightIndexImplementationVersion = UserDefaults.standard.integer(
+            forKey: SpotlightIndexingService.implementationVersionDefaultsKey
+        )
+        if storedSpotlightIndexImplementationVersion < SpotlightIndexingService.implementationVersion {
+            shouldRefreshSpotlightIndex = true
+        }
+        let dateString = UserDefaults.standard.string(
+            forKey: SpotlightIndexingService.lastRefreshDefaultsKey
+        )
         if let dateString,
            let date = try? Date(dateString, strategy: .iso8601),
-           date < Date.now - 20 * 24 * 60 * 60 {
+           date < Date.now - SpotlightIndexingService.periodicRebuildInterval {
             shouldRefreshSpotlightIndex = true
         } else if dateString == nil {
             shouldRefreshSpotlightIndex = true
@@ -118,7 +126,6 @@ struct ExcalidrawZApp: App {
             Task {
                 do {
                     try await PersistenceController.shared.refreshIndices()
-                    UserDefaults.standard.set(Date.now.formatted(.iso8601), forKey: "LastSpotlightIndexRefreshTime")
                 } catch {
                     startupLogger.error("Failed to refresh Spotlight index: \(error)")
                 }
@@ -140,13 +147,19 @@ struct ExcalidrawZApp: App {
             CalculatorTool(),
             DateTimeTool(),
             FileAccessStatusTool(),
+            GetCurrentFileTool(),
             ReadFileTool(),
             ReadCanvasImageTool(),
             ExportTool(),
             InsertMathTool(),
             AdjustElementsTool(),
+            NavigateCanvasTool(),
+            SetCanvasPreferencesTool(),
             RenameFileTool(),
+            ListGroupsTool(),
             ListAllFilesTool(),
+            ListLocalFoldersTool(),
+            ListLocalFilesTool(),
             QueryFileHistoryTool(),
             RestoreFileHistoryTool(),
             ListLibrariesTool(),
@@ -225,6 +238,7 @@ struct ExcalidrawZApp: App {
     @StateObject private var lockedContentState = LockedContentStateStore()
 
     @State private var isArchiveFilesExporterPresented = false
+    @State private var didScheduleAIConversationCacheWarmup = false
 
 
     let server = ExcalidrawServer()
@@ -249,6 +263,7 @@ struct ExcalidrawZApp: App {
 #if os(macOS) && !APP_STORE
                     updateChecker.assignUpdater(updater: updaterController.updater)
 #endif
+                    scheduleAIConversationCacheWarmupIfNeeded()
                 }
         }
         // prevent window being open by urls.
@@ -375,6 +390,21 @@ struct ExcalidrawZApp: App {
 #endif
         }
 #endif
+    }
+
+    @MainActor
+    private func scheduleAIConversationCacheWarmupIfNeeded() {
+        guard !didScheduleAIConversationCacheWarmup else { return }
+        didScheduleAIConversationCacheWarmup = true
+
+        Task { @MainActor in
+            try? await Task.sleep(for: .seconds(3))
+            guard AIChatAvailability.canUseAI else { return }
+            guard case .loaded = llmState.conversations else {
+                await llmState.refreshConversations()
+                return
+            }
+        }
     }
 }
 

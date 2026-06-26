@@ -81,8 +81,6 @@ struct WhatsNewView: View {
         self.showContinue = showContinue
     }
     
-    @State var navigationSize: CGSize = .zero
-    
     enum Route: Hashable {
         case allFeatures
         case video(URL)
@@ -90,8 +88,6 @@ struct WhatsNewView: View {
 
     @State var route: Route? = nil
     @State var navigationPath: [Route] = []
-    
-    @State private var navigationMaxHeight: CGFloat = .zero
 
     private var contentHorizontalPadding: CGFloat {
         containerHorizontalSizeClass == .compact ? 10 : 40
@@ -204,12 +200,15 @@ struct WhatsNewView: View {
             }
 #if os(macOS)
             .bindWindow($window)
-            .frame(width: 720, height: sheetContentHeight)
+            .frame(width: 720, height: activeRoute == nil ? nil : sheetContentHeight)
+            .frame(maxHeight: maximumSheetContentHeight)
             .clipped()
             .onAppear {
+                guard activeRoute != nil else { return }
                 updateSheetHeight(to: preferredSheetHeight, animated: false)
             }
             .watch(value: preferredSheetHeight) { newValue in
+                guard activeRoute != nil else { return }
                 updateSheetHeight(to: newValue, animated: true)
             }
 #endif
@@ -231,18 +230,7 @@ struct WhatsNewView: View {
     
     @ViewBuilder
     private func navigationContent() -> some View {
-        ScrollView {
-            if containerHorizontalSizeClass == .compact {
-                content()
-            } else {
-                content()
-                    .padding(.horizontal, 40)
-            }
-        }
-        .readSize($navigationSize)
-//        .watch(value: navigationSize) { newValue in
-//            navigationMaxHeight = max(navigationMaxHeight, newValue.height)
-//        }
+        navigationRootContainer()
 #if os(macOS)
         .overlay(alignment: .topLeading) {
             ZStack {
@@ -275,6 +263,42 @@ struct WhatsNewView: View {
             }
         }
 #endif
+    }
+
+    @ViewBuilder
+    private func navigationRootContainer() -> some View {
+#if os(macOS)
+        if containerHorizontalSizeClass == .compact {
+            navigationScrollableRootContent()
+        } else if #available(macOS 13.0, *) {
+            ViewThatFits(in: .vertical) {
+                navigationRootContent()
+                navigationScrollableRootContent()
+            }
+            .frame(maxHeight: maximumSheetContentHeight)
+        } else {
+            navigationScrollableRootContent()
+        }
+#else
+        navigationScrollableRootContent()
+#endif
+    }
+
+    @ViewBuilder
+    private func navigationScrollableRootContent() -> some View {
+        ScrollView {
+            navigationRootContent()
+        }
+    }
+
+    @ViewBuilder
+    private func navigationRootContent() -> some View {
+        if containerHorizontalSizeClass == .compact {
+            content()
+        } else {
+            content()
+                .padding(.horizontal, 40)
+        }
     }
     
     @ViewBuilder
@@ -381,7 +405,7 @@ struct WhatsNewView: View {
     @ViewBuilder
     private func whatsNewCoverImage() -> some View {
         Color.clear
-            .frame(height: 300)
+            .frame(height: 340)
             .frame(maxWidth: .infinity)
             .overlay(alignment: .top) {
                 whatsNewCoverArtwork()

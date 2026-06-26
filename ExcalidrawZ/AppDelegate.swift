@@ -16,26 +16,87 @@ extension Notification.Name {
 
 #if os(macOS)
 import AppKit
+
+@MainActor
+final class ApplicationTerminationCanvasFlushCoordinator {
+    static let shared = ApplicationTerminationCanvasFlushCoordinator()
+
+    private weak var fileState: FileState?
+
+    private init() {}
+
+    func register(fileState: FileState) {
+        self.fileState = fileState
+    }
+
+    func flushPendingCanvasSnapshot() async {
+        await fileState?.flushPendingCanvasSnapshotBeforeTermination()
+    }
+}
+
 class AppDelegate: NSObject, NSApplicationDelegate {
+    private static let lastWindowCloseTerminationDelay: UInt64 = 2_000_000_000
+
     let logger = Logger(label: "AppDelegate")
+    private var isHandlingApplicationTermination = false
+    private var didPrepareLastWindowCloseTermination = false
     
     func applicationWillTerminate(_ notification: Notification) {
         PersistenceController.shared.save()
     }
+
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        if didPrepareLastWindowCloseTermination {
+            return .terminateNow
+        }
+
+        guard !isHandlingApplicationTermination else {
+            return .terminateCancel
+        }
+
+        isHandlingApplicationTermination = true
+        Task { @MainActor in
+            defer {
+                isHandlingApplicationTermination = false
+            }
+            await prepareForApplicationTermination()
+            sender.reply(toApplicationShouldTerminate: true)
+        }
+        return .terminateLater
+    }
     
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
         Task { @MainActor in
-            do {
-                try await backupFiles(context: PersistenceController.shared.container.viewContext)
-            } catch {
-                logger.error("Backup before app termination failed: \(error)")
-            }
-            try? await Task.sleep(nanoseconds: 2_000_000_000) // 2 seconds
-            if NSApp.windows.filter({$0.canBecomeMain}).isEmpty {
-                NSApp.terminate(nil)
-            }
+            await terminateAfterLastWindowClosedIfNeeded()
         }
         return false
+    }
+
+    @MainActor
+    private func terminateAfterLastWindowClosedIfNeeded() async {
+        await backupFilesBeforeTermination()
+        try? await Task.sleep(nanoseconds: Self.lastWindowCloseTerminationDelay)
+
+        guard NSApp.visibleMainWindows.isEmpty else { return }
+
+        await prepareForApplicationTermination()
+        didPrepareLastWindowCloseTermination = true
+        NSApp.terminate(nil)
+    }
+
+    @MainActor
+    private func prepareForApplicationTermination() async {
+        await ApplicationTerminationCanvasFlushCoordinator.shared.flushPendingCanvasSnapshot()
+        PersistenceController.shared.save()
+    }
+
+    @MainActor
+    private func backupFilesBeforeTermination() async {
+        do {
+            try await backupFiles(context: PersistenceController.shared.container.viewContext)
+        } catch {
+            logger.error("Backup before app termination failed: \(error)")
+        }
     }
     
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -67,6 +128,15 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         restorationHandler: @escaping ([any NSUserActivityRestoring]) -> Void
     ) -> Bool {
         return handleUserActivity(userActivity)
+    }
+}
+
+private extension NSApplication {
+    @MainActor
+    var visibleMainWindows: [NSWindow] {
+        windows.filter { window in
+            window.isVisible && window.canBecomeMain && !window.isMiniaturized
+        }
     }
 }
 

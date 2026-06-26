@@ -43,13 +43,11 @@ struct LibraryView: View {
     @State private var isRemoveSelectionsConfirmationPresented: Bool = false
     @State private var isFileExporterPresented: Bool = false
     
-    @State private var scrollViewSize: CGSize = .zero
-    
-    
     @State private var inSelectionMode: Bool = false
     @State private var selectedItems = Set<LibraryItem>()
 
     @State private var searchQuery: String = ""
+    private let searchHeaderReservedHeight: CGFloat = 52
 
     @State private var isLibraryBrowserPresented: Bool = false
     /// Set inside the browser sheet when the user opts to import from file —
@@ -265,13 +263,7 @@ struct LibraryView: View {
 #endif
             } else {
                 VStack(spacing: 0) {
-                    searchField
-                        .padding(.horizontal, 10)
-                        .padding(.top, 8)
-                        .padding(.bottom, 4)
-                    
                     scrollContent()
-                        .readSize($scrollViewSize)
                     
                     if #available(macOS 26.0, *) { } else {
                         Divider()
@@ -302,7 +294,7 @@ struct LibraryView: View {
                 text: $searchQuery,
                 prompt: Text(localizable: .libraryItemsSearchPrompt)
             )
-                .textFieldStyle(.plain)
+            .textFieldStyle(.plain)
             if !searchQuery.isEmpty {
                 Button {
                     searchQuery = ""
@@ -316,9 +308,28 @@ struct LibraryView: View {
         .padding(.horizontal, 12)
         .padding(.vertical, 6)
         .background {
-            Capsule()
-                .fill(.regularMaterial)
+            searchFieldBackground
         }
+    }
+
+    @ViewBuilder
+    private var searchFieldBackground: some View {
+        Capsule()
+            .fill(.clear)
+            .background {
+                if #available(macOS 26.0, iOS 26.0, *) {
+                    Capsule()
+                        .fill(.clear)
+                        .glassEffect(.regular.interactive(), in: Capsule())
+                } else {
+                    Capsule()
+                        .fill(.ultraThinMaterial)
+                }
+            }
+            .overlay {
+                Capsule()
+                    .strokeBorder(Color.primary.opacity(0.10), lineWidth: 0.5)
+            }
     }
     
 #if os(iOS)
@@ -326,13 +337,7 @@ struct LibraryView: View {
     private func compactContent() -> some View {
         NavigationStack {
             VStack(spacing: 0) {
-                searchField
-                    .padding(.horizontal, 16)
-                    .padding(.top, 8)
-                    .padding(.bottom, 4)
-
                 scrollContent()
-                    .readSize($scrollViewSize)
             }
             .navigationTitle(.localizable(.librariesTitle))
             .navigationBarTitleDisplayMode(.inline)
@@ -394,7 +399,7 @@ struct LibraryView: View {
     @ViewBuilder
     private func scrollContent() -> some View {
         ScrollView {
-            LazyVStack(spacing: 16) {
+            VStack(spacing: 16) {
                 ForEach(libraries, id: \.self) { library in
                     LibrarySectionContent(
                         allLibraries: libraries,
@@ -402,12 +407,26 @@ struct LibraryView: View {
                         selections: inSelectionMode ? $selectedItems : nil,
                         searchQuery: searchQuery
                     )
+                    .padding(.horizontal, 10)
                 }
-                
+
                 Color.clear.frame(height: 100)
             }
-            .padding(.horizontal, 10)
+            .padding(.top, searchHeaderReservedHeight)
         }
+        .overlay(alignment: .top) {
+            searchHeader()
+        }
+    }
+
+    @ViewBuilder
+    private func searchHeader() -> some View {
+        searchField
+            .padding(.horizontal, 10)
+            .padding(.top, 8)
+            .padding(.bottom, 4)
+            .frame(height: searchHeaderReservedHeight, alignment: .top)
+            .zIndex(1)
     }
     
     @ViewBuilder

@@ -183,44 +183,19 @@ actor FileRepository {
     ) async throws {
         let context = PersistenceController.shared.newTaskContext()
 
-        // Step 1: Load file entity to get access to loadContent()
-        let file = try await context.perform {
-            guard let file = context.object(with: fileObjectID) as? File else {
-                throw AppError.fileError(.notFound)
-            }
-            return file
-        }
+        let contentData = try await prepareContentDataForUpdate(
+            fileObjectID: fileObjectID,
+            fileData: fileData,
+            context: context
+        )
 
-        // Step 2: Load content outside context.perform
-        let data = try await file.loadContent()
+        try await saveFileContentToStorage(
+            fileObjectID: fileObjectID,
+            content: contentData,
+            updateMetadataWhenPathUnchanged: false
+        )
 
-        // Step 3: Prepare updated content
-        let contentData = try await context.perform {
-            guard let file = context.object(with: fileObjectID) as? File else {
-                throw AppError.fileError(.notFound)
-            }
-            var obj = try JSONSerialization.jsonObject(with: data) as! [String : Any]
-            guard let fileDataJson = try JSONSerialization.jsonObject(with: fileData) as? [String : Any] else {
-                throw AppError.fileError(.contentNotAvailable(filename: file.name ?? String(localizable: .generalUnknown)))
-            }
-            obj["elements"] = fileDataJson["elements"]
-            obj["appState"] = fileDataJson["appState"]
-            obj.removeValue(forKey: "files")
-            return try JSONSerialization.data(withJSONObject: obj)
-        }
-
-        // Step 4: Update CoreData immediately (as fallback)
-        try await context.perform {
-            guard let file = context.object(with: fileObjectID) as? File else { return }
-            file.content = contentData
-            file.updatedAt = .now
-            try context.save()
-        }
-
-        // Step 5: Save file to storage
-        try await saveFileContentToStorage(fileObjectID: fileObjectID, content: contentData)
-
-        // Step 6: Write checkpoint per policy.
+        // Step 2: Write checkpoint per policy.
         switch checkpoint {
         case .suppress:
             // Caller is in an AI chat session — content saved, history skipped.
@@ -253,6 +228,46 @@ actor FileRepository {
         }
     }
 
+    private func prepareContentDataForUpdate(
+        fileObjectID: NSManagedObjectID,
+        fileData: Data,
+        context: NSManagedObjectContext
+    ) async throws -> Data {
+        guard var fileDataJson = try JSONSerialization.jsonObject(with: fileData) as? [String : Any] else {
+            let fileName = await context.perform {
+                (context.object(with: fileObjectID) as? File)?.name
+            }
+            throw AppError.fileError(.contentNotAvailable(filename: fileName ?? String(localizable: .generalUnknown)))
+        }
+
+        if Self.isCompleteExcalidrawFileContent(fileDataJson) {
+            fileDataJson.removeValue(forKey: "files")
+            return try JSONSerialization.data(withJSONObject: fileDataJson)
+        }
+
+        // Legacy callers may still pass only the canvas payload. In that case
+        // preserve the existing file envelope and replace the scene fields.
+        let file = try await context.perform {
+            guard let file = context.object(with: fileObjectID) as? File else {
+                throw AppError.fileError(.notFound)
+            }
+            return file
+        }
+        let data = try await file.loadContent()
+        var contentObject = try JSONSerialization.jsonObject(with: data) as! [String : Any]
+        contentObject["elements"] = fileDataJson["elements"]
+        contentObject["appState"] = fileDataJson["appState"]
+        contentObject.removeValue(forKey: "files")
+        return try JSONSerialization.data(withJSONObject: contentObject)
+    }
+
+    private static func isCompleteExcalidrawFileContent(_ object: [String : Any]) -> Bool {
+        object["elements"] != nil
+            && object["appState"] != nil
+            && object["type"] != nil
+            && object["version"] != nil
+    }
+
     /// Force-write an explicitly tagged checkpoint for the current state of a
     /// file without going through the elements-update path. Used by automated
     /// integrations such as AI chat and MCP to create precise pre/post
@@ -277,7 +292,11 @@ actor FileRepository {
     /// - Parameters:
     ///   - fileObjectID: The file objectID
     ///   - content: The content data to save
-    func saveFileContentToStorage(fileObjectID: NSManagedObjectID, content: Data) async throws {
+    func saveFileContentToStorage(
+        fileObjectID: NSManagedObjectID,
+        content: Data,
+        updateMetadataWhenPathUnchanged: Bool = true
+    ) async throws {
         let context = PersistenceController.shared.newTaskContext()
 
         // Step 1: Get file ID and metadata
@@ -306,12 +325,35 @@ actor FileRepository {
         )
 
         // Step 3: Update after successful save
-        try await context.perform {
-            guard let file = context.object(with: fileObjectID) as? File else { return }
+        let didUpdateMetadata = try await context.perform {
+            guard let file = context.object(with: fileObjectID) as? File else { return false }
+            if !updateMetadataWhenPathUnchanged,
+               file.filePath == relativePath,
+               file.content == nil {
+                return false
+            }
             file.updateAfterSavingToStorage(filePath: relativePath)
             try context.save()
+            return true
         }
-        logger.debug("Saved file to storage: \(relativePath)")
+        if didUpdateMetadata {
+            logger.debug("Saved file to storage: \(relativePath)")
+            await PersistenceController.shared.spotlightIndexingService.indexFile(fileObjectID: fileObjectID)
+        } else {
+            logger.debug("Saved file to storage without CoreData metadata update: \(relativePath)")
+        }
+    }
+
+    private func saveFileContentFallback(
+        fileObjectID: NSManagedObjectID,
+        content: Data
+    ) async throws {
+        let context = PersistenceController.shared.newTaskContext()
+        try await context.perform {
+            guard let file = context.object(with: fileObjectID) as? File else { return }
+            file.updateContentFallback(data: content)
+            try context.save()
+        }
     }
 
     private func encryptedContentIfNeeded(
@@ -421,11 +463,15 @@ actor FileRepository {
 
         struct LatestLookup {
             let foundUserCheckpoint: NSManagedObjectID?
+            let shouldCreateNewCheckpoint: Bool
         }
 
         let lookup: LatestLookup = try await context.perform {
             guard let file = context.object(with: fileObjectID) as? File else {
-                return LatestLookup(foundUserCheckpoint: nil)
+                return LatestLookup(
+                    foundUserCheckpoint: nil,
+                    shouldCreateNewCheckpoint: true
+                )
             }
 
             // Match user-source rows OR legacy rows (source == nil).
@@ -438,27 +484,33 @@ actor FileRepository {
             )
             fetchRequest.sortDescriptors = [.init(key: "updatedAt", ascending: false)]
             guard let checkpoint = try context.fetch(fetchRequest).first else {
-                return LatestLookup(foundUserCheckpoint: nil)
+                return LatestLookup(
+                    foundUserCheckpoint: nil,
+                    shouldCreateNewCheckpoint: true
+                )
             }
 
-            self.logger.info("Updating latest user checkpoint")
-            checkpoint.content = content
-            checkpoint.filename = file.name
-            checkpoint.updatedAt = .now
-            // Backfill source on legacy rows so future predicates can be
-            // written without the OR-nil branch.
-            if checkpoint.source == nil {
-                checkpoint.source = FileCheckpointSource.user.rawValue
-            }
-            try context.save()
-            return LatestLookup(foundUserCheckpoint: checkpoint.objectID)
+            return LatestLookup(
+                foundUserCheckpoint: checkpoint.objectID,
+                shouldCreateNewCheckpoint: UserCheckpointRolloverPolicy.shouldCreateNewCheckpoint(
+                    latestUpdatedAt: checkpoint.updatedAt
+                )
+            )
         }
 
-        if let checkpointObjectID = lookup.foundUserCheckpoint {
-            try await PersistenceController.shared.checkpointRepository.saveCheckpointToStorage(checkpointObjectID: checkpointObjectID)
+        if let checkpointObjectID = lookup.foundUserCheckpoint,
+           !lookup.shouldCreateNewCheckpoint {
+            self.logger.info("Updating latest user checkpoint")
+            try await PersistenceController.shared.checkpointRepository.saveCheckpointContentToStorage(
+                checkpointObjectID: checkpointObjectID,
+                content: content,
+                updateMetadataWhenPathUnchanged: false
+            )
         } else {
-            // Latest checkpoint(s) are all AI rows — start a new user
-            // checkpoint instead of clobbering them.
+            // Start a new checkpoint when there is no user row to update,
+            // or when the current editing run has exceeded the rollover
+            // interval. This keeps long sessions from having a single
+            // restore point that can be overwritten by a bad save.
             _ = try await createCheckpoint(
                 fileObjectID: fileObjectID,
                 content: content,
@@ -510,6 +562,104 @@ actor FileRepository {
 
     // MARK: - Delete File
 
+    private struct DeletedFileStorageInfo: Sendable {
+        let relativePath: String
+        let fileID: UUID
+    }
+
+    private struct DeletedCheckpointStorageInfo: Sendable {
+        let relativePath: String
+        let checkpointID: UUID
+    }
+
+    private struct FileDeletionSideEffects: Sendable {
+        var files: [DeletedFileStorageInfo] = []
+        var checkpoints: [DeletedCheckpointStorageInfo] = []
+        var spotlightFileIDs: [UUID] = []
+        var fileScopeIDs: [String] = []
+    }
+
+    /// Delete multiple files in one Core Data transaction.
+    ///
+    /// This keeps multi-selection delete as an actual batch operation instead
+    /// of repeatedly creating contexts and saving once per file.
+    func delete(
+        fileObjectIDs: [NSManagedObjectID],
+        forcePermanently: Bool = false,
+        save: Bool = true
+    ) async throws {
+        guard !fileObjectIDs.isEmpty else { return }
+
+        let context = PersistenceController.shared.newTaskContext()
+
+        let sideEffects: FileDeletionSideEffects = try await context.perform {
+            var sideEffects = FileDeletionSideEffects()
+            var checkpointObjectIDsToDelete: [NSManagedObjectID] = []
+
+            for fileObjectID in fileObjectIDs {
+                guard let file = context.object(with: fileObjectID) as? File else {
+                    continue
+                }
+
+                if file.inTrash || forcePermanently {
+                    let checkpointsFetchRequest = NSFetchRequest<FileCheckpoint>(entityName: "FileCheckpoint")
+                    checkpointsFetchRequest.predicate = NSPredicate(format: "file = %@", file)
+                    let fileCheckpoints = try context.fetch(checkpointsFetchRequest)
+
+                    for checkpoint in fileCheckpoints {
+                        checkpointObjectIDsToDelete.append(checkpoint.objectID)
+                        guard let path = checkpoint.filePath,
+                              let id = checkpoint.id else { continue }
+                        sideEffects.checkpoints.append(
+                            DeletedCheckpointStorageInfo(
+                                relativePath: path,
+                                checkpointID: id
+                            )
+                        )
+                    }
+
+                    if let path = file.filePath,
+                       let id = file.id {
+                        sideEffects.files.append(
+                            DeletedFileStorageInfo(
+                                relativePath: path,
+                                fileID: id
+                            )
+                        )
+                    }
+
+                    if let id = file.id {
+                        sideEffects.spotlightFileIDs.append(id)
+                        sideEffects.fileScopeIDs.append(id.uuidString)
+                    } else {
+                        sideEffects.fileScopeIDs.append(file.objectID.uriRepresentation().absoluteString)
+                    }
+
+                    context.delete(file)
+                } else {
+                    if let id = file.id {
+                        sideEffects.spotlightFileIDs.append(id)
+                    }
+                    file.inTrash = true
+                    file.deletedAt = .now
+                }
+            }
+
+            if !checkpointObjectIDsToDelete.isEmpty {
+                let batchDeleteRequest = NSBatchDeleteRequest(objectIDs: checkpointObjectIDsToDelete)
+                try context.executeAndMergeChanges(using: batchDeleteRequest)
+            }
+
+            if save {
+                try context.save()
+            }
+
+            return sideEffects
+        }
+
+        await runDeletionSideEffects(sideEffects)
+    }
+
     /// Delete file (move to trash or permanently delete)
     /// - Parameters:
     ///   - fileObjectID: The NSManagedObjectID of the file
@@ -520,77 +670,41 @@ actor FileRepository {
         forcePermanently: Bool = false,
         save: Bool = true
     ) async throws {
-        let context = PersistenceController.shared.newTaskContext()
+        try await delete(
+            fileObjectIDs: [fileObjectID],
+            forcePermanently: forcePermanently,
+            save: save
+        )
+    }
 
-        // Extract file info before deletion (for permanent deletion only)
-        let (filePath, fileID, fileScopeID, checkpointPaths): (String?, UUID?, String?, [(String, UUID)]) = try await context.perform {
-            guard let file = context.object(with: fileObjectID) as? File else {
-                return (nil, nil, nil, [])
-            }
+    private func runDeletionSideEffects(_ sideEffects: FileDeletionSideEffects) async {
+        for spotlightFileID in sideEffects.spotlightFileIDs {
+            await PersistenceController.shared.spotlightIndexingService.deleteFile(id: spotlightFileID)
+        }
 
-            if file.inTrash || forcePermanently {
-                // Permanent deletion: collect file info and checkpoint info
-                let checkpointsFetchRequest = NSFetchRequest<FileCheckpoint>(entityName: "FileCheckpoint")
-                checkpointsFetchRequest.predicate = NSPredicate(format: "file = %@", file)
-                let fileCheckpoints = try context.fetch(checkpointsFetchRequest)
-
-                // Collect checkpoint paths for deletion
-                let checkpointInfo = fileCheckpoints.compactMap { checkpoint -> (String, UUID)? in
-                    guard let path = checkpoint.filePath, let id = checkpoint.id else { return nil }
-                    return (path, id)
-                }
-
-                // Delete checkpoints from database
-                if !fileCheckpoints.isEmpty {
-                    let batchDeleteRequest = NSBatchDeleteRequest(objectIDs: fileCheckpoints.map { $0.objectID })
-                    try context.executeAndMergeChanges(using: batchDeleteRequest)
-                }
-
-                let path = file.filePath
-                let id = file.id
-                let scopeID = file.id?.uuidString ?? file.objectID.uriRepresentation().absoluteString
-
-                // Delete file from database
-                context.delete(file)
-
-                if save {
-                    try context.save()
-                }
-
-                return (path, id, scopeID, checkpointInfo)
-            } else {
-                // Soft deletion: move to trash
-                file.inTrash = true
-                file.deletedAt = .now
-
-                if save {
-                    try context.save()
-                }
-
-                return (nil, nil, nil, [])
+        for checkpoint in sideEffects.checkpoints {
+            do {
+                try await FileStorageManager.shared.deleteContent(
+                    relativePath: checkpoint.relativePath,
+                    fileID: checkpoint.checkpointID.uuidString
+                )
+            } catch {
+                logger.warning("Failed to delete checkpoint file from storage: \(error)")
             }
         }
 
-        // Delete physical files from storage (local + iCloud) - only for permanent deletion
-        if let relativePath = filePath, let fileUUID = fileID {
-            // Delete checkpoint files
-            for (checkpointPath, checkpointID) in checkpointPaths {
-                do {
-                    try await FileStorageManager.shared.deleteContent(relativePath: checkpointPath, fileID: checkpointID.uuidString)
-                } catch {
-                    logger.warning("Failed to delete checkpoint file from storage: \(error)")
-                }
-            }
-
-            // Delete main file
+        for file in sideEffects.files {
             do {
-                try await FileStorageManager.shared.deleteContent(relativePath: relativePath, fileID: fileUUID.uuidString)
+                try await FileStorageManager.shared.deleteContent(
+                    relativePath: file.relativePath,
+                    fileID: file.fileID.uuidString
+                )
             } catch {
                 logger.warning("Failed to delete file from storage: \(error)")
             }
         }
 
-        if let fileScopeID {
+        for fileScopeID in sideEffects.fileScopeIDs {
             let scope = AIConversationFileScope(
                 kind: .libraryFile,
                 id: fileScopeID

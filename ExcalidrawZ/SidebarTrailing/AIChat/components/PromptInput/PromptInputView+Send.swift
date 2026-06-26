@@ -208,6 +208,7 @@ extension PromptInputView {
                 }
                 let model = modelOption.model
                 attemptedModelProfileID = modelOption.profileID
+                await ensureConversationCacheLoaded()
                 let isNewConversation = self.conversation == nil
                 let imageAttachments = AIChatImageAttachmentReference.makeReferences(from: files)
                 let canIncludeActiveFileContext = await activeFileAllowsAIContext()
@@ -407,6 +408,14 @@ extension PromptInputView {
             toolsData: ExcalidrawAgentConfig.encodeToolNames(tools)
         )
         await llmState.refreshConversations()
+    }
+
+    @MainActor
+    private func ensureConversationCacheLoaded() async {
+        guard case .loaded = llmState.conversations else {
+            await llmState.refreshConversations()
+            return
+        }
     }
 
     private func makeTransactionMetadata(

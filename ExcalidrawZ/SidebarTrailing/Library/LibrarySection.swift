@@ -6,6 +6,7 @@
 //
 
 import SwiftUI
+import CoreData
 import ChocofordUI
 
 struct LibrarySectionContent: View {
@@ -41,15 +42,24 @@ struct LibrarySectionContent: View {
         )
     }
 
-    let columns = [
-        GridItem(.flexible()),
-        GridItem(.flexible()),
-        GridItem(.flexible()),
-    ]
+    private let columnCount = 3
+    private let itemSpacing: CGFloat = 8
 
     private var filteredItems: [LibraryItem] {
         guard !searchQuery.isEmpty else { return Array(items) }
         return items.filter { ($0.name ?? "").localizedCaseInsensitiveContains(searchQuery) }
+    }
+
+    private var itemRows: [ItemRow] {
+        let items = filteredItems
+        return stride(from: 0, to: items.count, by: columnCount).map { startIndex in
+            let endIndex = min(startIndex + columnCount, items.count)
+            let rowItems = Array(items[startIndex..<endIndex])
+            return ItemRow(
+                id: rowItems.first?.objectID ?? library.objectID,
+                items: rowItems
+            )
+        }
     }
 
     @ViewBuilder
@@ -64,40 +74,19 @@ struct LibrarySectionContent: View {
     @ViewBuilder
     private var section: some View {
         DisclosureGroup(isExpanded: $isExpanded) {
-            LazyVGrid(columns: columns) {
-                ForEach(filteredItems) { item in
-                    LibraryItemView(item: item, inSelectionMode: selections != nil, libraries: allLibraries)
-                        .transition(.asymmetric(insertion: .identity, removal: .scale.animation(.bouncy)))
-                        .overlay(alignment: .bottomTrailing) {
-                            if let selections {
-                                let isSelected = selections.wrappedValue.contains(item)
-                                let size: CGFloat = 18
-                                ZStack {
-                                    if isSelected {
-                                        Circle().fill(.green)
-                                        Circle().stroke(.green)
-                                    } else {
-                                        Circle().stroke(.primary)
-                                    }
-                                    
-                                    Image(systemSymbol: .checkmark)
-                                        .resizable()
-                                        .scaledToFit()
-                                        .font(.body.bold())
-                                        .padding(3)
-                                        .foregroundStyle(isSelected ? AnyShapeStyle(.white) : AnyShapeStyle(.primary))
-                                }
-                                .padding(2)
-                                .frame(width: size, height: size)
-                                .padding(4)
-                            }
+            VStack(spacing: itemSpacing) {
+                ForEach(itemRows) { row in
+                    HStack(spacing: itemSpacing) {
+                        ForEach(row.items) { item in
+                            libraryItemCell(item)
                         }
-                        .simultaneousGesture(
-                            TapGesture().onEnded { _ in
-                                selections?.wrappedValue.insertOrRemove(item)
-                            },
-                            including: selections != nil ? .gesture : .subviews
-                        )
+
+                        ForEach(0..<max(0, columnCount - row.items.count), id: \.self) { _ in
+                            Color.clear
+                                .frame(height: 0)
+                                .frame(maxWidth: .infinity)
+                        }
+                    }
                 }
             }
         } label: {
@@ -115,5 +104,45 @@ struct LibrarySectionContent: View {
             }
         }
     }
-}
 
+    @ViewBuilder
+    private func libraryItemCell(_ item: LibraryItem) -> some View {
+        LibraryItemView(item: item, inSelectionMode: selections != nil, libraries: allLibraries)
+            .overlay(alignment: .bottomTrailing) {
+                if let selections {
+                    let isSelected = selections.wrappedValue.contains(item)
+                    let size: CGFloat = 18
+                    ZStack {
+                        if isSelected {
+                            Circle().fill(.green)
+                            Circle().stroke(.green)
+                        } else {
+                            Circle().stroke(.primary)
+                        }
+
+                        Image(systemSymbol: .checkmark)
+                            .resizable()
+                            .scaledToFit()
+                            .font(.body.bold())
+                            .padding(3)
+                            .foregroundStyle(isSelected ? AnyShapeStyle(.white) : AnyShapeStyle(.primary))
+                    }
+                    .padding(2)
+                    .frame(width: size, height: size)
+                    .padding(4)
+                }
+            }
+            .simultaneousGesture(
+                TapGesture().onEnded { _ in
+                    selections?.wrappedValue.insertOrRemove(item)
+                },
+                including: selections != nil ? .gesture : .subviews
+            )
+            .frame(maxWidth: .infinity)
+    }
+
+    private struct ItemRow: Identifiable {
+        let id: NSManagedObjectID
+        let items: [LibraryItem]
+    }
+}

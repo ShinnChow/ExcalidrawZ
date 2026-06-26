@@ -28,7 +28,7 @@ struct CompactExcalidrawHomeView: View {
         ZStack {
             NavigationStack {
                 ExcalidrawEditor(
-                    activeFile: $fileState.currentActiveFile,
+                    activeFile: fileState.activeFileBinding,
                     interactionEnabled: !disableInteration
                 )
                 .ignoresSafeArea()
@@ -85,7 +85,7 @@ struct CompactExcalidrawHomeTabBarAccessoryViewModifier: ViewModifier {
                 .tabViewBottomAccessory(isEnabled: isSyncStatePopoverPresented) {
                     SyncStatusContentView()
                 }
-                .onChange(of: syncState.hasActiveSyncOperations, initial: true, throttle: 0.2, latest: true) { _, newVal in
+                .onChange(of: syncState.shouldShowGlobalSyncStatus, initial: true, throttle: 0.2, latest: true) { _, newVal in
                     withAnimation(.smooth) {
                         isSyncStatePopoverPresented = newVal
                     }

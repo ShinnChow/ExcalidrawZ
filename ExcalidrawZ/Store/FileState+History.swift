@@ -6,6 +6,11 @@
 //
 
 import Foundation
+import CoreData
+
+extension Notification.Name {
+    static let activeCanvasFileDidRestore = Notification.Name("ActiveCanvasFileDidRestore")
+}
 
 extension FileState {
     @MainActor
@@ -15,30 +20,97 @@ extension FileState {
     ) async throws {
         switch currentActiveFile {
             case .file(let file):
-                file.content = content
-                if let filename {
-                    file.name = filename
+                let activeFile = ActiveFile.file(file)
+                var restoredFile = try ExcalidrawFile(data: content, id: activeFile.id)
+                restoredFile.name = filename ?? file.name
+
+                try await PersistenceController.shared.fileRepository.saveFileContentToStorage(
+                    fileObjectID: file.objectID,
+                    content: content
+                )
+                try saveRestoredLibraryFileMetadata(
+                    file,
+                    filename: filename
+                )
+                do {
+                    _ = try await PersistenceController.shared.fileRepository.recordCheckpoint(
+                        fileObjectID: file.objectID,
+                        content: content,
+                        source: .restorePost,
+                        description: nil
+                    )
+                } catch {
+                    logger.warning("Failed to record restore checkpoint for \(activeFile.id): \(error.localizedDescription)")
                 }
-                await excalidrawWebCoordinator?.loadFile(from: file, force: true)
-                didUpdateFile = false
+
+                guard currentActiveFile?.id == activeFile.id else { return }
+                await excalidrawWebCoordinator?.loadFile(from: restoredFile, force: true)
+                NotificationCenter.default.post(
+                    name: .activeCanvasFileDidRestore,
+                    object: restoredFile
+                )
 
             case .localFile(let fileURL):
                 guard case .localFolder(let folder) = currentActiveGroup else {
                     throw AIChatEditError.unsupportedFile
                 }
 
-                var parsedFile = try ExcalidrawFile(data: content)
-                parsedFile.id = ExcalidrawFile.localFileURLIDMapping[fileURL] ?? UUID().uuidString
+                let activeFile = ActiveFile.localFile(fileURL)
+                let parsedFile = try ExcalidrawFile(data: content, id: activeFile.id)
 
                 try await folder.withSecurityScopedURL { _ in
                     try await FileCoordinator.shared.coordinatedWrite(url: fileURL, data: content)
                 }
+                do {
+                    try await recordLocalRestoreCheckpoint(
+                        url: fileURL,
+                        content: content
+                    )
+                } catch {
+                    logger.warning("Failed to record local restore checkpoint for \(fileURL.lastPathComponent): \(error.localizedDescription)")
+                }
 
+                guard currentActiveFile?.id == activeFile.id else { return }
                 await excalidrawWebCoordinator?.loadFile(from: parsedFile, force: true)
-                didUpdateFile = false
+                NotificationCenter.default.post(
+                    name: .activeCanvasFileDidRestore,
+                    object: parsedFile
+                )
 
             case .temporaryFile, .collaborationFile, nil:
                 throw AIChatEditError.unsupportedFile
+        }
+    }
+
+    @MainActor
+    private func saveRestoredLibraryFileMetadata(
+        _ file: File,
+        filename: String?
+    ) throws {
+        guard let context = file.managedObjectContext else { return }
+        if let filename {
+            file.name = filename
+        }
+        file.updatedAt = .now
+        if context.hasChanges {
+            try context.save()
+        }
+    }
+
+    private func recordLocalRestoreCheckpoint(
+        url: URL,
+        content: Data
+    ) async throws {
+        let context = PersistenceController.shared.container.newBackgroundContext()
+        try await context.perform {
+            let checkpoint = LocalFileCheckpoint(context: context)
+            checkpoint.id = UUID()
+            checkpoint.url = url
+            checkpoint.updatedAt = .now
+            checkpoint.content = content
+            checkpoint.source = FileCheckpointSource.restorePost.rawValue
+            context.insert(checkpoint)
+            try context.save()
         }
     }
 }

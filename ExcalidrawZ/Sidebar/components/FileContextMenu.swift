@@ -11,16 +11,18 @@ import CoreData
 struct FileMenuProvider: View {
     @Environment(\.managedObjectContext) private var viewContext
     @Environment(\.alertToast) var alertToast
-    @EnvironmentObject var fileState: FileState
     
     var file: File?
+    var fileState: FileState
     var content: (Triggers) -> AnyView
 
     init<Content: View>(
         file: File?,
+        fileState: FileState,
         content: @escaping (Triggers) -> Content
     ) {
         self.file = file
+        self.fileState = fileState
         self.content = { AnyView(content($0)) }
     }
     
@@ -85,13 +87,11 @@ struct FileMenuProvider: View {
 
         Task.detached {
             do {
-                for fileID in fileIDsToDelete {
-                    try await PersistenceController.shared.fileRepository.delete(
-                        fileObjectID: fileID,
-                        forcePermanently: false,
-                        save: true
-                    )
-                }
+                try await PersistenceController.shared.fileRepository.delete(
+                    fileObjectIDs: fileIDsToDelete,
+                    forcePermanently: false,
+                    save: true
+                )
                 await MainActor.run {
                     if shouldClearActiveFile {
                         fileState.setActiveFile(nil)
@@ -114,6 +114,8 @@ struct FileMenuProvider: View {
 }
 
 struct FileContextMenuModifier: ViewModifier {
+    @EnvironmentObject private var fileState: FileState
+
     var file: File
 
     init(file: File) {
@@ -121,11 +123,34 @@ struct FileContextMenuModifier: ViewModifier {
     }
 
     func body(content: Content) -> some View {
-        FileMenuProvider(file: file) { triggers in
+        FileMenuProvider(file: file, fileState: fileState) { triggers in
             content
                 .contextMenu {
                     FileMenuItems(
-                        file: file
+                        file: file,
+                        fileState: fileState
+                    ) {
+                        triggers.onToggleRename()
+                    } onTogglePermanentlyDelete: {
+                        triggers.onTogglePermanentlyDelete()
+                    }
+                    .labelStyle(.titleAndIcon)
+                }
+        }
+    }
+}
+
+struct FileContextMenuWithFileStateModifier: ViewModifier {
+    var file: File
+    var fileState: FileState
+
+    func body(content: Content) -> some View {
+        FileMenuProvider(file: file, fileState: fileState) { triggers in
+            content
+                .contextMenu {
+                    FileMenuItems(
+                        file: file,
+                        fileState: fileState
                     ) {
                         triggers.onToggleRename()
                     } onTogglePermanentlyDelete: {
@@ -138,6 +163,8 @@ struct FileContextMenuModifier: ViewModifier {
 }
 
 struct FileMenu: View {
+    @EnvironmentObject private var fileState: FileState
+
     var file: File?
     var label: AnyView
 
@@ -150,10 +177,11 @@ struct FileMenu: View {
     }
 
     var body: some View {
-        FileMenuProvider(file: file) { triggers in
+        FileMenuProvider(file: file, fileState: fileState) { triggers in
             Menu {
                 FileMenuItems(
-                    file: file
+                    file: file,
+                    fileState: fileState
                 ) {
                     triggers.onToggleRename()
                 } onTogglePermanentlyDelete: {
@@ -174,9 +202,8 @@ struct FileMenuItems: View {
 #if os(iOS)
     @Environment(\.editMode) private var editMode
 #endif
-    @EnvironmentObject var fileState: FileState
-
     var file: File?
+    var fileState: FileState
     var onToggleRename: () -> Void
     var onTogglePermanentlyDelete: () -> Void
 
@@ -395,17 +422,23 @@ struct FileMenuItems: View {
 
         Task.detached {
             do {
-                try await context.perform {
+                let movedFileIDs: [UUID] = try await context.perform {
                     guard case let group as Group = context.object(with: groupID) else {
-                        return
+                        return []
                     }
+                    var movedFileIDs: [UUID] = []
                     for fileID in fileIDs {
                         if case let file as File = context.object(with: fileID) {
                             file.group = group
+                            if let id = file.id {
+                                movedFileIDs.append(id)
+                            }
                         }
                     }
                     try context.save()
+                    return movedFileIDs
                 }
+                await PersistenceController.shared.spotlightIndexingService.indexFiles(ids: movedFileIDs)
 
                 let fileID: NSManagedObjectID? = fileIDs.first { $0 == currentFileID }
                 if let fileID {
@@ -456,12 +489,9 @@ struct FileMenuItems: View {
             let fileIDsToDelete = files.map { $0.objectID }
             let shouldClearActiveFile = containsCurrentActiveFile(fileIDsToDelete)
 
-            for fileID in fileIDsToDelete {
-                try await PersistenceController.shared.fileRepository.delete(
-                    fileObjectID: fileID
-                )
-            }
-            try viewContext.save()
+            try await PersistenceController.shared.fileRepository.delete(
+                fileObjectIDs: fileIDsToDelete
+            )
 
             // If the current file was deleted, clear it
             if shouldClearActiveFile {

@@ -37,17 +37,16 @@ struct FileHomeItemLockPreviewModifier: ViewModifier {
             }
             .animation(.smooth(duration: 0.26), value: lockOverlayState)
             .task(id: file.id) {
+                guard lockedContentState.previewLockState(for: file) == nil else { return }
                 await lockedContentState.refresh(file: file)
             }
             .onAppear {
                 hasResolvedLockState = lockState != nil
-                clearPreviewCacheIfLocked(lockState)
                 setLockOverlayState(for: lockState, animated: false)
             }
             .watch(value: lockState) { newValue in
                 let shouldAnimate = hasResolvedLockState
                 hasResolvedLockState = newValue != nil
-                clearPreviewCacheIfLocked(newValue)
                 setLockOverlayState(for: newValue, animated: shouldAnimate)
             }
             .onDisappear {
@@ -125,11 +124,6 @@ struct FileHomeItemLockPreviewModifier: ViewModifier {
             case .temporarilyUnlocked:
                 "temporarilyUnlocked"
         }
-    }
-
-    private func clearPreviewCacheIfLocked(_ lockState: FileContentLockState?) {
-        guard lockState == .locked else { return }
-        FileItemPreviewCache.shared.removePreviewCache(forID: file.id)
     }
 }
 

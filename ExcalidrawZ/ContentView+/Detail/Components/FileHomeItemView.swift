@@ -191,18 +191,15 @@ struct FileHomeItemView: View {
 
     @ViewBuilder
     static func placeholder() -> some View {
-        ViewSizeReader { size in
-            let width = size.width > 0 ? size.width : nil
-            if #available(macOS 14.0, iOS 17.0, *) {
-                RoundedRectangle(cornerRadius: roundedCornerRadius)
-                    .fill(.placeholder)
-                    .opacity(0.2)
-                    .frame(height: width == nil ? 180 : width! * 0.5625)
-            } else {
-                RoundedRectangle(cornerRadius: roundedCornerRadius)
-                    .fill(Color.gray.opacity(0.1))
-                    .frame(height: width == nil ? 180 : width! * 0.5625)
-            }
+        if #available(macOS 14.0, iOS 17.0, *) {
+            RoundedRectangle(cornerRadius: roundedCornerRadius)
+                .fill(.placeholder)
+                .opacity(0.2)
+                .aspectRatio(16.0 / 9.0, contentMode: .fit)
+        } else {
+            RoundedRectangle(cornerRadius: roundedCornerRadius)
+                .fill(Color.gray.opacity(0.1))
+                .aspectRatio(16.0 / 9.0, contentMode: .fit)
         }
     }
 
@@ -221,13 +218,11 @@ struct FileHomeItemView: View {
 private struct FileHomeItemContentView: View {
     @Environment(\.containerHorizontalSizeClass) private var containerHorizontalSizeClass
     @Environment(\.colorScheme) var colorScheme
-    @Environment(\.scenePhase) var scenePhase
 #if os(iOS)
     @Environment(\.editMode) var editMode
 #endif
 
     @EnvironmentObject private var layoutState: LayoutState
-    @EnvironmentObject private var fileState: FileState
     @EnvironmentObject private var fileHomeItemTransitionItemState: FileHomeItemTransitionItemState
     @EnvironmentObject private var lockedContentState: LockedContentStateStore
 
@@ -251,7 +246,6 @@ private struct FileHomeItemContentView: View {
         self._localUpdatedAt = State(initialValue: updatedAt)
     }
     
-    @State private var width: CGFloat?
     @State private var localUpdatedAt: Date?
     
     @available(macOS 13.0, *)
@@ -285,23 +279,13 @@ private struct FileHomeItemContentView: View {
                 .clipShape(RoundedRectangle(cornerRadius: FileHomeItemView.roundedCornerRadius))
             }
         }
-        .readWidth($width)
     }
     
     @ViewBuilder
     private func content() -> some View {
         // Cover
         ZStack {
-            var height: CGFloat {
-                style == .file && layoutState.compactBrowserLayout == .list
-                ? 60
-                : width == nil
-                ? 180
-                : width! * (style == .file ? 0.75 : 0.46)
-            }
-
-            Color.clear
-                .frame(height: height)
+            coverSizingSurface
                 .modifier(
                     FileHomeItemLockPreviewModifier(
                         file: file,
@@ -432,12 +416,19 @@ private struct FileHomeItemContentView: View {
 //        }
     }
 
-    private var lockOverlayIconSize: CGFloat {
-        style == .file && layoutState.compactBrowserLayout == .list ? 22 : 34
+    @ViewBuilder
+    private var coverSizingSurface: some View {
+        if style == .file && layoutState.compactBrowserLayout == .list {
+            Color.clear
+                .frame(height: 60)
+        } else {
+            Color.clear
+                .aspectRatio(style == .file ? 4.0 / 3.0 : 1.0 / 0.46, contentMode: .fit)
+        }
     }
 
-    private var titleUnlockedBadgeIconSize: CGFloat {
-        style == .file && layoutState.compactBrowserLayout == .list ? 20 : 22
+    private var lockOverlayIconSize: CGFloat {
+        style == .file && layoutState.compactBrowserLayout == .list ? 22 : 34
     }
 
     @ViewBuilder

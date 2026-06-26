@@ -4,6 +4,12 @@
 //
 //  Created by Dove Zachary on 3/20/25.
 //
+//  When preparing a new release:
+//  1. Keep the newest release content in featuresContent().
+//  2. Move the previous featuresContent() rows into allFeaturesList() as a
+//     dedicated WhatsNewVersionSection.
+//  3. Keep version sections flat; do not extract per-version helper views.
+//
 
 import SwiftUI
 import SFSafeSymbols
@@ -11,32 +17,11 @@ import SFSafeSymbols
 extension WhatsNewView {
     @ViewBuilder
     func featuresContent() -> some View {
-        // 不能只有一行，不知道为啥一定报错
         WhatsNewFeatureRow(
-            title: .localizable(.whatsNewMCPServicesTitle),
-            description: .localizable(.whatsNewMCPServicesDescription),
+            title: .localizable(.whatsNewPerformanceImprovementsTitle),
+            description: .localizable(.whatsNewPerformanceImprovementsDescription),
         ) {
-            Image(systemSymbol: .serverRack)
-                .resizable()
-                .symbolRenderingMode(.hierarchical)
-        }
-
-        WhatsNewFeatureRow(
-            title: .localizable(.whatsNewBetterMathToolTitle),
-            description: .localizable(.whatsNewBetterMathToolDescription),
-        ) {
-            Image(systemSymbol: .xSquareroot)
-                .resizable()
-                .symbolRenderingMode(.hierarchical)
-        }
-
-        WhatsNewFeatureRow(
-            title: .localizable(.whatsNewCustomToolOrderTitle),
-            description: .localizable(.whatsNewCustomToolOrderDescription),
-        ) {
-            Image(systemSymbol: {
-                if #available(macOS 13.0, iOS 16.0, *) { .arrowUpAndDownTextHorizontal } else { .arrowUpAndDownCircle }
-            }())
+            Image(systemSymbol: .timer)
                 .resizable()
                 .symbolRenderingMode(.hierarchical)
         }
@@ -51,6 +36,36 @@ extension WhatsNewView {
                         version: Bundle.main.infoDictionary!["CFBundleShortVersionString"] as! String
                     ) {
                         featuresContent()
+                    }
+                    WhatsNewVersionSection(version: "v2.2.0") {
+                        WhatsNewFeatureRow(
+                            title: .localizable(.whatsNewMCPServicesTitle),
+                            description: .localizable(.whatsNewMCPServicesDescription),
+                        ) {
+                            Image(systemSymbol: .serverRack)
+                                .resizable()
+                                .symbolRenderingMode(.hierarchical)
+                        }
+
+                        WhatsNewFeatureRow(
+                            title: .localizable(.whatsNewBetterMathToolTitle),
+                            description: .localizable(.whatsNewBetterMathToolDescription),
+                        ) {
+                            Image(systemSymbol: .xSquareroot)
+                                .resizable()
+                                .symbolRenderingMode(.hierarchical)
+                        }
+
+                        WhatsNewFeatureRow(
+                            title: .localizable(.whatsNewCustomToolOrderTitle),
+                            description: .localizable(.whatsNewCustomToolOrderDescription),
+                        ) {
+                            Image(systemSymbol: {
+                                if #available(macOS 13.0, iOS 16.0, *) { .arrowUpAndDownTextHorizontal } else { .arrowUpAndDownCircle }
+                            }())
+                                .resizable()
+                                .symbolRenderingMode(.hierarchical)
+                        }
                     }
                     WhatsNewVersionSection(version: "v2.1.1") {
 #if os(iOS)

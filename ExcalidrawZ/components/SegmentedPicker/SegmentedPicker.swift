@@ -9,7 +9,20 @@ import SwiftUI
 import ChocofordUI
 
 class SegmentedPickerModel<Selection>: ObservableObject where Selection : Hashable {
-    @Published var selection: Selection?
+    @Published private(set) var selection: Selection?
+
+    var onSelectionChanged: ((Selection?) -> Void)?
+
+    func setSelection(_ newValue: Selection?) {
+        guard selection != newValue else { return }
+        selection = newValue
+        onSelectionChanged?(newValue)
+    }
+
+    func syncSelection(_ newValue: Selection?) {
+        guard selection != newValue else { return }
+        selection = newValue
+    }
 }
 
 struct SegmentedPicker<Selection, Content>: View where Selection : Hashable, Content : View {
@@ -27,6 +40,7 @@ struct SegmentedPicker<Selection, Content>: View where Selection : Hashable, Con
     }
     
     @StateObject private var viewModel = SegmentedPickerModel<Selection>()
+    @State private var canAnimateSelectionBackground = false
     
     var body: some View {
         _VariadicView.Tree(SegmentedPickerContent()) {
@@ -36,7 +50,7 @@ struct SegmentedPicker<Selection, Content>: View where Selection : Hashable, Con
             SegmentedPickerPreferenceKey.self,
             alignment: .center
         ) { value in
-            if let selection, let anchor = value[selection.hashValue] {
+            if let selection = viewModel.selection, let anchor = value[selection.hashValue] {
                 GeometryReader { geomerty in
                     let rect = geomerty[anchor]
                     SwiftUI.Group {
@@ -59,7 +73,12 @@ struct SegmentedPicker<Selection, Content>: View where Selection : Hashable, Con
                     }
                     .frame(width: rect.width, height: rect.height)
                     .offset(x: rect.minX, y: rect.minY)
-                    .animation(.bouncy, value: rect)
+                    .animation(canAnimateSelectionBackground ? .bouncy : nil, value: rect)
+                    .task {
+                        guard !canAnimateSelectionBackground else { return }
+                        await Task.yield()
+                        canAnimateSelectionBackground = true
+                    }
                 }
             }
         }
@@ -67,30 +86,35 @@ struct SegmentedPicker<Selection, Content>: View where Selection : Hashable, Con
         .apply { content in
             if #available(iOS 17.0, macOS 14.0, *) {
                 content
-                    .watch(value: selection) { oldValue, newValue in
-                        if newValue != viewModel.selection {
-                            viewModel.selection = newValue
-                        }
+                    .onAppear {
+                        bindViewModelSelection()
                     }
-                    .watch(value: viewModel.selection, initial: true) { _, newValue in
-                        if newValue != selection {
-                            selection = newValue
+                    .watch(value: selection, initial: true) { _, newValue in
+                        if newValue != viewModel.selection {
+                            viewModel.syncSelection(newValue)
                         }
                     }
             } else {
                 content
+                    .onAppear {
+                        bindViewModelSelection()
+                    }
                     .watch(value: selection) { newValue in
                         if newValue != viewModel.selection {
-                            viewModel.selection = newValue
-                        }
-                    }
-                    .watch(value: viewModel.selection) { _, newValue in
-                        if newValue != selection {
-                            selection = newValue
+                            viewModel.syncSelection(newValue)
                         }
                     }
             }
         }
+    }
+
+    private func bindViewModelSelection() {
+        let selectionBinding = $selection
+        viewModel.onSelectionChanged = { newValue in
+            guard selectionBinding.wrappedValue != newValue else { return }
+            selectionBinding.wrappedValue = newValue
+        }
+        viewModel.syncSelection(selectionBinding.wrappedValue)
     }
 }
 
@@ -151,7 +175,7 @@ struct SegmentedPickerItem<Value>: View where Value : Hashable {
     @ViewBuilder
     private func buttonView() -> some View {
         Button {
-            viewModel.selection = value
+            viewModel.setSelection(value)
         } label: {
             content
                 .foregroundStyle(

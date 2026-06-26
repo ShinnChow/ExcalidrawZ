@@ -14,6 +14,7 @@ struct ExcalidrawEditorOverlayModifier: ViewModifier {
     @Environment(\.managedObjectContext) var viewContext
     @Environment(\.alertToast) var alertToast
     @Environment(\.containerHorizontalSizeClass) var containerHorizontalSizeClass
+    @Environment(\.colorScheme) private var colorScheme
 
     @EnvironmentObject var layoutState: LayoutState
     @EnvironmentObject private var fileState: FileState
@@ -21,16 +22,20 @@ struct ExcalidrawEditorOverlayModifier: ViewModifier {
     @Binding var loadingState: ExcalidrawCanvasView.LoadingState
     var hasFile: Bool
 
-    @State private var isProgressViewPresented = true
+    @State private var isLoadingOverlayPresented = false
+    @State private var isProgressViewPresented = false
     @State private var isSelectFilePlaceholderPresented = false
+    @State private var progressPresentationTask: Task<Void, Never>?
+    @State private var loadingOverlayDismissTask: Task<Void, Never>?
+    @State private var loadingOverlayCoverImage: PlatformImage?
 
     func body(content: Content) -> some View {
         ZStack(alignment: .center) {
             content
-                .opacity(isProgressViewPresented ? 0 : 1)
+                .opacity(isLoadingOverlayPresented ? 0 : 1)
                 .opacity(hasFile ? 1 : 0)
-                .onChange(of: loadingState, debounce: 1) { newVal in
-                    isProgressViewPresented = newVal == .loading
+                .watch(value: loadingState, initial: true) { _, newVal in
+                    updateProgressPresentation(for: newVal)
                 }
 
             if containerHorizontalSizeClass != .compact {
@@ -41,11 +46,11 @@ struct ExcalidrawEditorOverlayModifier: ViewModifier {
                 emptyFilePlaceholderview()
             }
 
-            if isProgressViewPresented {
-                VStack {
-                    ProgressView()
-                        .progressViewStyle(.circular)
-                    Text(.localizable(.webViewLoadingText))
+            if isLoadingOverlayPresented {
+                loadingOverlayBackground
+
+                if isProgressViewPresented {
+                    loadingIndicatorView
                 }
             } else if case .file(let file) = fileState.currentActiveFile, file.inTrash {
                 recoverOverlayView
@@ -53,7 +58,133 @@ struct ExcalidrawEditorOverlayModifier: ViewModifier {
         }
         .ignoresSafeArea(.container, edges: .bottom)
         .transition(.opacity)
-        .animation(.default, value: isProgressViewPresented)
+        .onDisappear {
+            progressPresentationTask?.cancel()
+            progressPresentationTask = nil
+            loadingOverlayDismissTask?.cancel()
+            loadingOverlayDismissTask = nil
+        }
+    }
+
+    private var loadingIndicatorView: some View {
+        VStack(spacing: 8) {
+            ProgressView()
+                .progressViewStyle(.circular)
+            Text(.localizable(.webViewLoadingText))
+                .font(.callout)
+                .foregroundStyle(.secondary)
+        }
+        .padding(.horizontal, 18)
+        .padding(.vertical, 14)
+        .background {
+            if #available(macOS 26.0, iOS 26.0, *) {
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .fill(.clear)
+                    .glassEffect(.clear, in: .rect(cornerRadius: 16))
+            } else {
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .fill(.regularMaterial)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var loadingOverlayBackground: some View {
+        GeometryReader { geometry in
+            let rect = adjustedLoadingOverlayBackgroundRect(in: geometry)
+
+            loadingOverlayBackgroundContent
+                .frame(width: rect.width, height: rect.height)
+                .clipped()
+                .offset(x: rect.minX, y: rect.minY)
+        }
+    }
+
+    @ViewBuilder
+    private var loadingOverlayBackgroundContent: some View {
+        if let image = loadingOverlayCoverImage {
+            Image(platformImage: image)
+                .resizable()
+                .scaledToFill()
+        } else {
+            fallbackLoadingOverlayBackground
+        }
+    }
+
+    private func adjustedLoadingOverlayBackgroundRect(in geometry: GeometryProxy) -> CGRect {
+        let rect = CGRect(origin: .zero, size: geometry.size)
+#if os(macOS)
+        let topInset = max(
+            geometry.safeAreaInsets.top,
+            geometry.frame(in: .global).minY
+        )
+        guard topInset > 0 else { return rect }
+        return CGRect(
+            x: rect.minX,
+            y: rect.minY - topInset,
+            width: rect.width,
+            height: rect.height + topInset
+        )
+#else
+        return rect
+#endif
+    }
+
+    private var loadingCoverImage: PlatformImage? {
+        guard hasFile,
+              let activeFile = fileState.currentActiveFile else {
+            return nil
+        }
+        return FileItemPreviewCache.shared.getPreviewCache(
+            forID: activeFile.id,
+            colorScheme: colorScheme
+        )
+    }
+
+    @ViewBuilder
+    private var fallbackLoadingOverlayBackground: some View {
+        if #available(macOS 14.0, iOS 17.0, *) {
+            Rectangle()
+                .fill(.windowBackground)
+        } else {
+            Rectangle()
+                .fill(Color.windowBackgroundColor)
+        }
+    }
+
+    private func updateProgressPresentation(for loadingState: ExcalidrawCanvasView.LoadingState) {
+        progressPresentationTask?.cancel()
+        progressPresentationTask = nil
+        loadingOverlayDismissTask?.cancel()
+        loadingOverlayDismissTask = nil
+
+        guard loadingState == .loading else {
+            if isProgressViewPresented {
+                loadingOverlayDismissTask = Task { @MainActor in
+                    try? await Task.sleep(nanoseconds: 100_000_000)
+                    guard !Task.isCancelled else { return }
+                    isProgressViewPresented = false
+                    isLoadingOverlayPresented = false
+                    loadingOverlayCoverImage = nil
+                    loadingOverlayDismissTask = nil
+                }
+            } else {
+                isLoadingOverlayPresented = false
+                loadingOverlayCoverImage = nil
+            }
+            return
+        }
+
+        if !isLoadingOverlayPresented {
+            loadingOverlayCoverImage = loadingCoverImage
+        }
+        isLoadingOverlayPresented = true
+        progressPresentationTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 150_000_000)
+            guard !Task.isCancelled else { return }
+            isProgressViewPresented = true
+            progressPresentationTask = nil
+        }
     }
 
     @ViewBuilder

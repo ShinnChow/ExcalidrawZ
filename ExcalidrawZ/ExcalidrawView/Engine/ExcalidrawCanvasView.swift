@@ -73,6 +73,8 @@ struct ExcalidrawCanvasView: View {
     
     @StateObject private var excalidrawCore = ExcalidrawCore()
     @State private var hasSetupCore = false
+    @State private var loadingFileID: String?
+    @State private var pendingErrorEvent: IdentifiableError?
     
     // MARK: - Computed Properties
     
@@ -135,8 +137,8 @@ struct ExcalidrawCanvasView: View {
                     try? await excalidrawCore.toggleWebPointerEvents(enabled: enabled)
                 }
             }
-            .watch(value: file) { newFile in
-                handleFileChange(newFile)
+            .watch(value: file?.id) { _ in
+                handleFileChange(file)
             }
             .watch(value: colorScheme) { newValue in
                 // self.logger.info("color scheme changed: \(newValue)")
@@ -158,13 +160,23 @@ struct ExcalidrawCanvasView: View {
                     }
                 }
             }
-#if os(iOS)
             .watch(value: scenePhase) { scenePhase in
+#if os(iOS)
                 if scenePhase == .active {
                     applyColorMode(scenePhase: scenePhase)
                 }
-            }
 #endif
+                if scenePhase == .background {
+                    Task {
+                        await excalidrawCore.documentSyncController
+                            .flushPendingDirtySnapshot(reason: "sceneBackground", force: true)
+                    }
+                }
+            }
+            .watch(value: pendingErrorEvent) { event in
+                guard let event else { return }
+                onError(event.error)
+            }
             .task {
                 await listenToLoadingState()
             }
@@ -203,15 +215,15 @@ struct ExcalidrawCanvasView: View {
     private func listenToLoadingState() async {
         for await isLoading in excalidrawCore.$isLoading.values {
             await MainActor.run {
-                loadingState = isLoading ? .loading : .loaded
+                loadingState = (isLoading || loadingFileID != nil) ? .loading : .loaded
             }
 
-            if !isLoading, type == .normal {
+            if !isLoading, loadingFileID == nil, type == .normal {
                 await applyLoadedFilePresentationSettings()
             }
 
 #if os(iOS)
-            if !isLoading {
+            if !isLoading, loadingFileID == nil {
                 await enterCompactDragModeAfterLoadIfNeeded()
             }
 #endif
@@ -279,7 +291,7 @@ struct ExcalidrawCanvasView: View {
     private func listenToErrors() async {
         for await error in excalidrawCore.errorStream {
             await MainActor.run {
-                onError(error)
+                pendingErrorEvent = IdentifiableError(error)
             }
         }
     }
@@ -295,7 +307,12 @@ struct ExcalidrawCanvasView: View {
         }
 
         guard let newFile else {
+            loadingFileID = nil
             excalidrawCore.documentSyncController.resetFileLoadState()
+            return
+        }
+
+        guard excalidrawCore.documentSyncController.currentLoadedFileID != newFile.id else {
             return
         }
 
@@ -308,6 +325,8 @@ struct ExcalidrawCanvasView: View {
         // WebView-level `isLoading`, so the sync hooked to that signal won't
         // fire. Now that `loadFile` properly awaits Excalidraw's scene
         // application, we can chain the re-sync directly.
+        loadingFileID = newFile.id
+        loadingState = .loading
         Task {
             let outcome = await excalidrawCore.documentSyncController.load(newFile)
             let isStillCurrent = await MainActor.run {
@@ -315,11 +334,18 @@ struct ExcalidrawCanvasView: View {
             }
             guard isStillCurrent else { return }
 
+            await MainActor.run {
+                if loadingFileID == newFile.id {
+                    loadingFileID = nil
+                }
+            }
+
             if outcome.didLoad {
                 await applyLoadedFilePresentationSettings()
             }
 
             await MainActor.run {
+                loadingState = .loaded
                 onDocumentLoadFinished(newFile.id)
             }
         }
