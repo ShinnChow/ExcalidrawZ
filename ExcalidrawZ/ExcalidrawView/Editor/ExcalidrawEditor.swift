@@ -263,6 +263,16 @@ struct ExcalidrawEditor: View {
                 await loadExcalidrawFile(from: newFile)
             }
         }
+        .onReceive(
+            NotificationCenter.default.publisher(for: .activeCanvasFileDidRestore)
+        ) { notification in
+            guard let restoredFile = notification.object as? ExcalidrawFile,
+                  activeFile?.id == restoredFile.id else {
+                return
+            }
+            excalidrawFile = restoredFile
+            lastEditTime = Date()
+        }
         .watch(value: fileState.currentActiveFileIsInTrash) { _ in
             collapseCompactAISurfacesIfCurrentFileIsTrashed()
         }
