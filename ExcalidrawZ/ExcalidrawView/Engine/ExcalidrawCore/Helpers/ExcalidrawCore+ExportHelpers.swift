@@ -8,6 +8,20 @@
 import Foundation
 import SwiftUI
 
+enum ExcalidrawPreviewExportError: LocalizedError {
+    case notReady(String)
+    case timedOut(String, TimeInterval)
+
+    var errorDescription: String? {
+        switch self {
+            case .notReady(let label):
+                return "Preview export is not ready: \(label)"
+            case .timedOut(let label, let timeout):
+                return "Preview export timed out: \(label), timeout=\(String(format: "%.1f", timeout))s"
+        }
+    }
+}
+
 extension ExcalidrawCore {
     struct ViewportImageExportResult {
         let data: Data
@@ -190,6 +204,89 @@ extension ExcalidrawCore {
         return image
     }
 
+    @MainActor
+    var isReadyForPreviewExport: Bool {
+        !isLoading && !isNavigating && isDocumentLoaded && !webView.isLoading
+    }
+
+    @MainActor
+    var previewExportReadinessSummary: String {
+        "isLoading=\(isLoading), isNavigating=\(isNavigating), isDocumentLoaded=\(isDocumentLoaded), webView.isLoading=\(webView.isLoading)"
+    }
+
+    @MainActor
+    func exportElementsPreviewToPNG(
+        elements: [ExcalidrawElement],
+        embedScene: Bool = false,
+        files: [String : ExcalidrawFile.ResourceFile]? = nil,
+        withBackground: Bool = true,
+        colorScheme: ColorScheme,
+        exportScale: Int = 1,
+        timeoutNanoseconds: UInt64 = 8_000_000_000
+    ) async throws -> PlatformImage {
+        guard isReadyForPreviewExport else {
+            throw ExcalidrawPreviewExportError.notReady(previewExportReadinessSummary)
+        }
+
+        await PreviewExportSerialQueue.shared.acquire()
+        defer {
+            Task {
+                await PreviewExportSerialQueue.shared.release()
+            }
+        }
+
+        let data = try await withPreviewExportTimeout(
+            label: "elements",
+            timeoutNanoseconds: timeoutNanoseconds
+        ) {
+            try await self.exportElementsToPNGData(
+                elements: elements,
+                files: files,
+                embedScene: embedScene,
+                withBackground: withBackground,
+                colorScheme: colorScheme,
+                exportScale: exportScale
+            )
+        }
+        guard let image = PlatformImage(data: data) else {
+            struct DecodeImageFailed: Error {}
+            throw DecodeImageFailed()
+        }
+        return image
+    }
+
+    @MainActor
+    func exportViewportPreviewToPNG(
+        sceneData: Data,
+        colorScheme: ColorScheme? = nil,
+        timeoutNanoseconds: UInt64 = 8_000_000_000
+    ) async throws -> PlatformImage {
+        guard isReadyForPreviewExport else {
+            throw ExcalidrawPreviewExportError.notReady(previewExportReadinessSummary)
+        }
+
+        await PreviewExportSerialQueue.shared.acquire()
+        defer {
+            Task {
+                await PreviewExportSerialQueue.shared.release()
+            }
+        }
+
+        let result = try await withPreviewExportTimeout(
+            label: "viewport",
+            timeoutNanoseconds: timeoutNanoseconds
+        ) {
+            try await self.exportViewportToPNGData(
+                sceneData: sceneData,
+                colorScheme: colorScheme
+            )
+        }
+        guard let image = PlatformImage(data: result.data) else {
+            throw InvalidJavaScriptResult()
+        }
+        return image
+    }
+
     func exportElementsToSVGData(
         elements: [ExcalidrawElement],
         files: [String : ExcalidrawFile.ResourceFile]? = nil,
@@ -342,6 +439,82 @@ extension ExcalidrawCore {
                 return value.boolValue
             default:
                 return nil
+        }
+    }
+}
+
+private final class PreviewExportContinuationBox<Value>: @unchecked Sendable {
+    private let lock = NSLock()
+    private var continuation: CheckedContinuation<Value, Error>?
+
+    init(_ continuation: CheckedContinuation<Value, Error>) {
+        self.continuation = continuation
+    }
+
+    func resume(with result: Result<Value, Error>) {
+        let continuation: CheckedContinuation<Value, Error>?
+        lock.lock()
+        continuation = self.continuation
+        self.continuation = nil
+        lock.unlock()
+        continuation?.resume(with: result)
+    }
+}
+
+private actor PreviewExportSerialQueue {
+    static let shared = PreviewExportSerialQueue()
+
+    private var isRunning = false
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+
+    func acquire() async {
+        if !isRunning {
+            isRunning = true
+            return
+        }
+
+        await withCheckedContinuation { continuation in
+            waiters.append(continuation)
+        }
+    }
+
+    func release() {
+        if waiters.isEmpty {
+            isRunning = false
+        } else {
+            waiters.removeFirst().resume()
+        }
+    }
+}
+
+private extension ExcalidrawCore {
+    @MainActor
+    func withPreviewExportTimeout<Value>(
+        label: String,
+        timeoutNanoseconds: UInt64,
+        operation: @escaping @MainActor () async throws -> Value
+    ) async throws -> Value {
+        try await withCheckedThrowingContinuation { continuation in
+            let box = PreviewExportContinuationBox<Value>(continuation)
+            let operationTask = Task { @MainActor in
+                do {
+                    let value = try await operation()
+                    box.resume(with: .success(value))
+                } catch {
+                    box.resume(with: .failure(error))
+                }
+            }
+
+            Task {
+                do {
+                    try await Task.sleep(nanoseconds: timeoutNanoseconds)
+                    operationTask.cancel()
+                    let timeout = TimeInterval(timeoutNanoseconds) / 1_000_000_000
+                    box.resume(with: .failure(ExcalidrawPreviewExportError.timedOut(label, timeout)))
+                } catch {
+                    return
+                }
+            }
         }
     }
 }

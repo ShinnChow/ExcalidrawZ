@@ -153,6 +153,7 @@ struct ContentView: View {
                         lockedContentState: lockedContentState,
                         context: viewContext
                     )
+                    LibraryItemPreviewCoordinator.shared.register(fileState: fileState)
                     FileCoverCacheCoordinator.shared.scheduleLibraryPrewarm(colorScheme: colorScheme)
                 }
                 await prepare()

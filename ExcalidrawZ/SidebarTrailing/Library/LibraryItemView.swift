@@ -6,6 +6,7 @@
 //
 
 import SwiftUI
+import CoreData
 import UniformTypeIdentifiers
 import Logging
 
@@ -195,9 +196,7 @@ struct LibraryItemView: View {
                 guard !elements.isEmpty else {
                     throw LibraryItemInsertionError.noItemsInserted
                 }
-                let insertedElementIDs = elements.map(\.id)
                 try await coordinator.addElements(elements)
-                await focusInsertedElements(ids: insertedElementIDs, coordinator: coordinator)
                 if showsSuccessToast {
                     alertToast(.init(
                         displayMode: .hud,
@@ -209,28 +208,6 @@ struct LibraryItemView: View {
                 libraryItemLogger.error("Failed to add library item to canvas: \(error.localizedDescription)")
                 alertToast(error)
             }
-        }
-    }
-
-    private func focusInsertedElements(
-        ids: [String],
-        coordinator: ExcalidrawCanvasView.Coordinator
-    ) async {
-        guard !ids.isEmpty else { return }
-        do {
-            try await Task.sleep(nanoseconds: 100_000_000)
-            try Task.checkCancellation()
-            try await coordinator.zoomToFitElements(
-                ids: ids,
-                options: .init(
-                    animate: true,
-                    duration: 300,
-                    viewportZoomFactor: 0.7
-                )
-            )
-        } catch is CancellationError {
-        } catch {
-            libraryItemLogger.warning("Failed to focus inserted library item: \(error.localizedDescription)")
         }
     }
     
@@ -337,32 +314,39 @@ private struct EditLibraryItemSheet: View {
 #endif
     }
 }
-#if os(macOS)
-let excalidrawLibItemsCache: NSCache = NSCache<NSString, NSImage>()
-#else
-let excalidrawLibItemsCache: NSCache = NSCache<NSString, UIImage>()
-#endif
-
 struct LibraryItemContentView: View {
     @Environment(\.colorScheme) var colorScheme
     @EnvironmentObject var appPreference: AppPreference
 
     @EnvironmentObject var exportState: ExportState
     
-    var item: ExcalidrawLibrary
+    private let previewSource: LibraryItemPreviewSource
     var size: CGFloat = 80
     
     init(item: ExcalidrawLibrary, size: CGFloat = 80) {
-        self.item = item
+        if let firstItem = item.libraryItems.first {
+            self.previewSource = .inline(
+                itemID: firstItem.id,
+                elements: firstItem.elements
+            )
+        } else {
+            self.previewSource = .inline(
+                itemID: item.id.uuidString,
+                elements: []
+            )
+        }
         self.size = size
     }
     
     init(item: LibraryItem, size: CGFloat = 80) {
-        self.item = item.excalidrawLibrary
+        self.previewSource = .managed(
+            objectID: item.objectID,
+            itemID: item.id ?? item.objectID.uriRepresentation().absoluteString
+        )
         self.size = size
     }
     
-    @State private var image: Image?
+    @State private var image: PlatformImage?
 
     var displayColorScheme: ColorScheme {
         appPreference.excalidrawAppearance == .dark || (appPreference.excalidrawAppearance == .auto && colorScheme == .dark) ? .dark : .light
@@ -371,31 +355,24 @@ struct LibraryItemContentView: View {
     var body: some View {
         content()
             .onAppear {
-                guard let webCoordinator = exportState.excalidrawWebCoordinator else { return }
-                let colorScheme: ColorScheme = displayColorScheme
-                Task.detached {
-                    do {
-                        let image: Image
-                        if let platformImage = excalidrawLibItemsCache.object(
-                            forKey: NSString(string: item.libraryItems[0].id + (colorScheme == .dark ? "_dark" : "_light"))
-                        ) {
-                            image = Image(platformImage: platformImage)
-                        } else {
-                            let nsImage = try await webCoordinator.exportElementsToPNG(
-                                elements: item.libraryItems[0].elements,
-                                withBackground: false,
-                                colorScheme: colorScheme,
-                            )
-                            excalidrawLibItemsCache.setObject(nsImage, forKey: NSString(string: item.libraryItems[0].id + (colorScheme == .dark ? "_dark" : "_light")))
-                            image = Image(platformImage: nsImage)
-                        }
-                        await MainActor.run {
-                            self.image = image
-                        }
-                    } catch {
-                        libraryItemLogger.warning("Failed to render library item preview: \(error)")
-                    }
-                }
+                updatePreview()
+            }
+            .onDisappear {
+                LibraryItemPreviewCoordinator.shared.cancelRequest(
+                    source: previewSource,
+                    colorScheme: displayColorScheme
+                )
+            }
+            .watch(value: displayColorScheme) { _ in
+                updatePreview()
+            }
+            .onReceive(
+                NotificationCenter.default.publisher(for: .libraryItemPreviewDidUpdate)
+            ) { notification in
+                guard let itemID = notification.object as? String,
+                      itemID == previewSource.id else { return }
+
+                updatePreview(requestIfMissing: false)
             }
     }
     
@@ -404,7 +381,7 @@ struct LibraryItemContentView: View {
         Center {
             VStack {
                 if let image {
-                    image
+                    Image(platformImage: image)
                         .resizable()
                         .scaledToFit()
                 } else {
@@ -431,6 +408,30 @@ struct LibraryItemContentView: View {
 //                    )
 //            }
 //        }
+    }
+
+    private func updatePreview(requestIfMissing: Bool = true) {
+        let colorScheme = displayColorScheme
+        let cacheKey = LibraryItemPreviewCache.cacheKey(
+            forID: previewSource.id,
+            colorScheme: colorScheme
+        )
+
+        if let platformImage = LibraryItemPreviewCache.shared.object(forKey: cacheKey) {
+            image = platformImage
+            return
+        }
+
+        image = nil
+        guard requestIfMissing else {
+            return
+        }
+
+        LibraryItemPreviewCoordinator.shared.request(
+            source: previewSource,
+            colorScheme: colorScheme,
+            coordinator: exportState.excalidrawWebCoordinator
+        )
     }
     
 }

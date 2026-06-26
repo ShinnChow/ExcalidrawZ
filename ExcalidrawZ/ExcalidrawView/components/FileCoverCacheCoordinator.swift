@@ -358,18 +358,13 @@ final class FileCoverCacheCoordinator: ObservableObject {
         }
 
         while !Task.isCancelled, !queue.isEmpty {
-            let job = queue.removeFirst()
-            queuedKeys.remove(job.cacheKey)
-
-            if !job.source.isCheckpointPreview,
-               job.priority.rawValue < Priority.userInitiated.rawValue,
-               fileState?.currentActiveFile != nil {
-                queuedKeys.insert(job.cacheKey)
-                queue.append(job)
-                sortQueue()
+            guard let jobIndex = queue.firstIndex(where: { !shouldDeferForActiveFile($0) }) else {
                 try? await Task.sleep(nanoseconds: 750_000_000)
                 continue
             }
+
+            let job = queue.remove(at: jobIndex)
+            queuedKeys.remove(job.cacheKey)
 
             if !job.forceRefresh,
                cache.object(forKey: job.cacheKey as NSString) != nil {
@@ -386,6 +381,12 @@ final class FileCoverCacheCoordinator: ObservableObject {
                 requeue(job)
             }
         }
+    }
+
+    private func shouldDeferForActiveFile(_ job: Job) -> Bool {
+        !job.source.isCheckpointPreview
+        && job.priority.rawValue < Priority.userInitiated.rawValue
+        && fileState?.currentActiveFile != nil
     }
 
     private func requeue(_ job: Job) {
@@ -639,24 +640,30 @@ final class FileCoverCacheCoordinator: ObservableObject {
             try exportFile.updateContentFilesFromFiles()
         }
         let sceneData = try exportFile.content ?? JSONEncoder().encode(exportFile)
-        return try await coordinator.exportViewportToPNG(
+        return try await coordinator.exportViewportPreviewToPNG(
             sceneData: sceneData,
             colorScheme: colorScheme
         )
     }
 
     private func waitForPreviewExporter() async -> ExcalidrawCanvasView.Coordinator? {
+        var lastReadinessSummary = "coordinator=nil"
         for _ in 0..<20 {
             guard !Task.isCancelled else { return nil }
 
-            if let coordinator = fileState?.excalidrawWebCoordinator,
-               !coordinator.isLoading {
-                return coordinator
+            if let coordinator = fileState?.excalidrawWebCoordinator {
+                lastReadinessSummary = coordinator.previewExportReadinessSummary
+                if coordinator.isReadyForPreviewExport {
+                    return coordinator
+                }
+            } else {
+                lastReadinessSummary = "coordinator=nil"
             }
 
             try? await Task.sleep(nanoseconds: 250_000_000)
         }
 
+        logger.debug("Preview export coordinator unavailable: \(lastReadinessSummary)")
         return nil
     }
 
